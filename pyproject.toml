@@ -1,0 +1,22 @@
+[project]
+name = "langgraph-app"
+version = "0.1.0"
+description = "Modular LangGraph + OpenAI agent boilerplate with SQLite persistence, middleware, and a Streamlit chat UI."
+authors = [
+    { name = "shivank", email = "shivanksharma22@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28.1",
+    "langchain>=1.0",
+    "langchain-openai>=1.2.2",
+    "langgraph>=1.2.2",
+    "langgraph-checkpoint-sqlite>=3.1.0",
+    "pydantic-settings>=2.14.1",
+    "python-dotenv>=1.2.2",
+    "streamlit>=1.57.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
