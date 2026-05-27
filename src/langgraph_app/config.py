@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -53,12 +54,15 @@ class Settings(BaseSettings):
         ge=1,
         description="Reject user turns whose latest message exceeds this size (guardrail).",
     )
-    guardrail_blocklist: list[str] = Field(
+    # NoDecode tells pydantic-settings NOT to JSON-decode env values for these
+    # fields, so the `_split_csv` validator below receives the raw string and
+    # can parse a comma-separated list (e.g. `HITL_TOOLS=get_weather,send_email`).
+    guardrail_blocklist: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description="Case-insensitive substrings that cause the guardrail to refuse input.",
     )
 
-    hitl_tools: list[str] = Field(
+    hitl_tools: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["get_weather"],
         description="Tool names that require human approval before execution.",
     )
@@ -68,7 +72,13 @@ class Settings(BaseSettings):
     @field_validator("guardrail_blocklist", "hitl_tools", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
-        """Accept comma-separated strings in env vars and turn them into lists."""
+        """Accept comma-separated strings in env vars and turn them into lists.
+
+        Handles three input shapes:
+          - already-a-list (e.g. passed in from Python) -> returned as-is
+          - empty string (e.g. `HITL_TOOLS=` in .env)  -> `[]`
+          - "a,b,c" or "a, b ,c" -> ["a", "b", "c"]
+        """
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
