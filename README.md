@@ -1,16 +1,16 @@
-# LangGraph Boilerplate
+# LangGraph Deep Agent — Legacy-to-AKS Migration
 
-A modular **LangGraph + OpenAI** agent boilerplate.
+A **LangGraph Deep Agent** that assesses migrating legacy on-prem workloads to managed **Azure Kubernetes Service (AKS)**.
 
-- Built with `langchain.agents.create_agent` (LangChain v1.x).
-- OpenAI model selectable via env (defaults to `gpt-5.2`).
-- SQLite persistence (`SqliteSaver`) so conversations survive restarts.
-- Three production-shape middlewares wired in: **Guardrail**, **Logging**, **HumanInTheLoop**.
-- One swappable example **API-calling tool** (`get_weather`).
-- **FastAPI** REST API on port 8000 — expose the agent to any HTTP client.
-- **Streamlit** chat UI on port 8501 — approve / edit / reject HITL flow included.
-- Single-process monolith launcher — one command starts both servers.
-- Managed entirely with **`uv`**. No Docker.
+- Built with `deepagents.create_deep_agent` — adds a planning tool, a filesystem, subagents, and the **SKILL.md** progressive-disclosure system on top of a standard LangGraph agent.
+- **Skill-driven workflow** ([`agent_workspace/skills/aks-migration/SKILL.md`](agent_workspace/skills/aks-migration/SKILL.md)): discover servers -> find their applications -> research each app's GitLab repo -> recommend AKS migration targets.
+- **FilesystemBackend** persists intermediate results (a `canvas.md` scratchpad plus `servers.json` / `applications.json`) to `agent_workspace/`.
+- **Two authenticated tools**: `call_authenticated_api` (platform/servers API, bearer token) and `gitlab_api` (GitLab REST, PAT) — credentials injected at runtime, never seen by the model.
+- **code-researcher subagent** owns the GitLab tool and runs codebase research in isolated context.
+- OpenAI model selectable via env (defaults to `gpt-5.2`); SQLite persistence (`SqliteSaver`) so conversations survive restarts.
+- **Guardrail** + **Logging** middleware retained; HITL approval via the deep agent's `interrupt_on`.
+- **FastAPI** REST API (:8000) and **Streamlit** chat UI (:8501) with approve / edit / reject HITL flow.
+- Single-process monolith launcher. Managed entirely with **`uv`**. No Docker.
 
 ---
 
@@ -63,15 +63,22 @@ flowchart TD
         subgraph streamlitBlock ["Streamlit  :8501"]
             UI["Chat UI + HITL"]
         end
-        subgraph coreBlock ["Agent Core"]
-            AG["build_agent()"]
-            MW["GuardrailMiddleware\nLoggingMiddleware\nHumanInTheLoop"]
+        subgraph coreBlock ["Deep Agent Core"]
+            AG["build_agent() -> create_deep_agent"]
+            MW["GuardrailMiddleware + LoggingMiddleware + planning/filesystem/skills"]
             Model["ChatOpenAI"]
-            Tools["get_weather"]
+            Skill["SKILL.md: aks-migration"]
+            Tools["call_authenticated_api (bearer)"]
+            Sub["code-researcher subagent -> gitlab_api (PAT)"]
+            FS["FilesystemBackend\nagent_workspace/canvas.md"]
         end
         fastapiBlock -->|"app.state.agent"| AG
         streamlitBlock -->|"build_agent() cached"| AG
-        AG --> MW --> Model --> Tools --> Model
+        AG --> MW --> Model
+        Model --> Tools
+        Model --> Sub
+        AG --> Skill
+        AG <--> FS
         AG <-->|checkpoints| CP["SqliteSaver\ndata/checkpoints.sqlite"]
     end
     Browser["Browser"] --> streamlitBlock
@@ -82,7 +89,7 @@ flowchart TD
 
 ```
 src/langgraph_app/
-├── agent.py                  # build_agent() — single assembly point
+├── agent.py                  # build_agent() -> create_deep_agent (single assembly point)
 ├── server.py                 # monolith launcher (uvicorn + streamlit subprocess)
 ├── checkpointer.py           # SqliteSaver factory
 ├── config.py                 # pydantic-settings -> `settings` singleton
@@ -91,14 +98,21 @@ src/langgraph_app/
 │   ├── router.py             # /health + /chat endpoints
 │   └── schemas.py            # request / response models
 ├── tools/
-│   ├── __init__.py           # exports ALL_TOOLS
-│   └── api_tool.py           # get_weather (swap your real API here)
+│   ├── __init__.py           # MAIN_TOOLS / RESEARCH_TOOLS / ALL_TOOLS
+│   ├── api_tool.py           # get_weather (kept example)
+│   ├── bearer_api_tool.py    # call_authenticated_api (bearer token, InjectedToolArg)
+│   └── gitlab_tool.py        # gitlab_api (GitLab PAT, InjectedToolArg)
 ├── middleware/
 │   ├── guardrails.py         # input length / blocklist / iteration cap
-│   ├── hitl.py               # HumanInTheLoopMiddleware factory
+│   ├── hitl.py               # HumanInTheLoopMiddleware factory (legacy; HITL now via interrupt_on)
 │   └── logging.py            # before_model / after_model tracing
 └── ui/
     └── streamlit_app.py      # chat UI + HITL approve/edit/reject
+
+agent_workspace/              # FilesystemBackend root (gitignored except skills/)
+└── skills/
+    └── aks-migration/
+        └── SKILL.md          # the migration workflow (fill in your endpoints)
 ```
 
 Everything is wired in `agent.py`. The `api/` and `ui/` layers are thin consumers of `build_agent()`.
@@ -194,12 +208,18 @@ All settings come from environment variables (or a `.env` file at the project ro
 | `MODEL_NAME`           | `gpt-5.2`                            | OpenAI model identifier.                                  |
 | `TEMPERATURE`          | `0.2`                                | Sampling temperature.                                     |
 | `DB_PATH`              | `data/checkpoints.sqlite`            | SQLite checkpoint file.                                   |
-| `SYSTEM_PROMPT`        | helpful concise assistant            | Base system prompt.                                       |
+| `WORKSPACE_DIR`        | `agent_workspace`                    | FilesystemBackend root; skills load from `<dir>/skills`.  |
+| `API_BEARER_TOKEN`     | _empty_                              | Fallback bearer token for the platform API (headless).   |
+| `GITLAB_TOKEN`         | _empty_                              | Fallback GitLab PAT for `gitlab_api` (headless).          |
+| `GITLAB_BASE_URL`      | `https://gitlab.com/api/v4`          | GitLab REST API base URL.                                 |
+| `SYSTEM_PROMPT`        | AKS migration assistant              | Base system prompt.                                       |
 | `MAX_ITERATIONS`       | `8`                                  | Guardrail: hard cap on model calls per run.               |
 | `MAX_INPUT_CHARS`      | `8000`                               | Guardrail: reject user turns longer than this.            |
 | `GUARDRAIL_BLOCKLIST`  | _empty_                              | Comma-separated, case-insensitive substring blocklist.    |
-| `HITL_TOOLS`           | `get_weather`                        | Comma-separated tool names that pause for human approval. |
+| `HITL_TOOLS`           | `call_authenticated_api`             | Comma-separated tool names that pause for human approval. |
 | `LOG_LEVEL`            | `INFO`                               | Standard Python log level.                                |
+
+> The Streamlit sidebar has a **Bearer token** and a **GitLab PAT** field. Tokens entered there are injected per-session through the run config and take precedence over `API_BEARER_TOKEN` / `GITLAB_TOKEN`, which exist only as fallbacks for headless API callers.
 
 ---
 
@@ -219,7 +239,9 @@ Order matters — outer middleware wraps inner.
 
 Uses the stdlib `logging` module — pipe it anywhere (stdout, files, structured aggregators).
 
-### 3. `HumanInTheLoopMiddleware` (built-in)
+### 3. Human-in-the-loop (deep agent `interrupt_on`)
+
+`build_agent()` passes `interrupt_on={name: True for name in settings.hitl_tools}` to `create_deep_agent` (same `HumanInTheLoopMiddleware` under the hood).
 
 - Pauses the graph **before** any tool listed in `HITL_TOOLS` is executed.
 - Surfaces an `__interrupt__` payload.
@@ -228,17 +250,29 @@ Uses the stdlib `logging` module — pipe it anywhere (stdout, files, structured
 
 ---
 
-## Swapping the example tool for your real API
+## The migration skill
 
-Open [`src/langgraph_app/tools/api_tool.py`](src/langgraph_app/tools/api_tool.py). It's intentionally tiny:
+The end-to-end workflow lives in [`agent_workspace/skills/aks-migration/SKILL.md`](agent_workspace/skills/aks-migration/SKILL.md). The deep agent reads it on demand (progressive disclosure) when a prompt matches the skill's `description`, then follows its steps:
 
-1. Rename `get_weather` to your tool name. Keep the `@tool` decorator and type hints — the model uses them to decide how to call the tool.
-2. Replace the URL, params, and response shaping.
-3. Pull any credentials from `langgraph_app.config.settings` (add a new field to `Settings`). **Never** hardcode keys in the tool file.
-4. If you add **more** tools, create a new module in `tools/` and append it to `ALL_TOOLS` in [`src/langgraph_app/tools/__init__.py`](src/langgraph_app/tools/__init__.py).
-5. If your new tool is sensitive (writes data, sends emails, spends money), add its name to `HITL_TOOLS` in `.env` so HITL gates it.
+1. `GET` the **servers** endpoint via `call_authenticated_api`; save to `/servers.json`.
+2. `GET` the **applications-per-server** endpoint; save to `/applications.json`.
+3. Delegate each app to the **code-researcher** subagent, which uses `gitlab_api` to inspect the repo.
+4. Append findings to `/canvas.md` after each step.
+5. Produce AKS migration target recommendations citing the canvas.
 
-No other file needs to change — `agent.py` reads `ALL_TOOLS` and `settings.hitl_tools` directly.
+**To use it against your environment:** open the `SKILL.md` and replace the `<PLACEHOLDER>` endpoints with your real URLs. No code change required.
+
+## Tools and credentials
+
+| Tool | Used by | Auth | Credential source |
+|------|---------|------|-------------------|
+| `call_authenticated_api` | main agent | `Authorization: Bearer <token>` | Streamlit "Bearer token" field, else `API_BEARER_TOKEN` |
+| `gitlab_api` | code-researcher subagent | `PRIVATE-TOKEN: <pat>` | Streamlit "GitLab PAT" field, else `GITLAB_TOKEN` |
+| `get_weather` | (kept example) | none | — |
+
+Both authenticated tools mark their credential parameter with `InjectedToolArg`, so the LLM never generates or sees the token — it is injected at runtime from the run config's `configurable`.
+
+To add **more** tools: create a module in `tools/`, then add it to `MAIN_TOOLS`, `RESEARCH_TOOLS`, or `ALL_TOOLS` in [`src/langgraph_app/tools/__init__.py`](src/langgraph_app/tools/__init__.py). If a tool is sensitive, add its name to `HITL_TOOLS` so the deep agent's `interrupt_on` gates it.
 
 ---
 

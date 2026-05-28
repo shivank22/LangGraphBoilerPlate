@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from langgraph_app.ui.pages import chat, info
+from langgraph_app.ui.views import chat, info
 
 
 st.set_page_config(
@@ -25,7 +25,7 @@ st.set_page_config(
 
 pg = st.navigation(
     [
-        st.Page(chat.render, title="Chat", icon="\U0001F4AC", url_path="chat", default=True),
+        st.Page(chat.render, title="DICE Agent", icon="\U0001F4AC", url_path="chat", default=True),
         st.Page(info.render, title="Info", icon="\U00002139\uFE0F", url_path="info"),
     ]
 )

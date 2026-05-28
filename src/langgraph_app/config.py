@@ -36,10 +36,43 @@ class Settings(BaseSettings):
         description="Filesystem path to the SQLite checkpoint database.",
     )
 
+    workspace_dir: str = Field(
+        default=str(PROJECT_ROOT / "agent_workspace"),
+        description=(
+            "Root directory for the deep agent's filesystem backend. Skills are "
+            "loaded from `<workspace_dir>/skills` and scratch files (canvas.md, "
+            "servers.json, ...) are written here."
+        ),
+    )
+
+    # --- Credentials for outbound API tools ---------------------------------
+    # These are optional fallbacks used by headless callers (e.g. the FastAPI
+    # routes). The Streamlit UI supplies them per-session instead and injects
+    # them through the run config, which takes precedence.
+    api_bearer_token: str = Field(
+        default="",
+        description="Bearer token for the platform/servers REST API (fallback).",
+    )
+    gitlab_token: str = Field(
+        default="",
+        description="GitLab Personal Access Token used by the gitlab_api tool (fallback).",
+    )
+    gitlab_base_url: str = Field(
+        default="https://gitlab.com/api/v4",
+        description="Base URL for the GitLab REST API (no trailing slash).",
+    )
+
     system_prompt: str = Field(
         default=(
-            "You are a helpful, concise assistant. "
-            "Use the tools available to you when relevant, and explain your reasoning briefly."
+            "You are a migration assistant that helps move legacy on-prem "
+            "workloads to managed Azure Kubernetes Service (AKS). "
+            "You have access to skills describing multi-step migration "
+            "workflows — consult them when a request matches. "
+            "Use the available tools to query the platform APIs and GitLab, "
+            "save intermediate results to the filesystem (for example "
+            "`/canvas.md`), and delegate codebase research to the "
+            "`code-researcher` subagent. Explain your reasoning briefly and "
+            "cite the files you wrote when presenting recommendations."
         ),
         description="System prompt prepended to every conversation.",
     )
@@ -63,7 +96,7 @@ class Settings(BaseSettings):
     )
 
     hitl_tools: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["get_weather"],
+        default_factory=lambda: ["call_authenticated_api"],
         description="Tool names that require human approval before execution.",
     )
 

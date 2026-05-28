@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
+from ..config import settings
 from .schemas import (
     ChatRequest,
     ChatResponse,
@@ -39,7 +40,18 @@ router = APIRouter()
 
 
 def _thread_config(thread_id: str) -> dict[str, Any]:
-    return {"configurable": {"thread_id": thread_id}}
+    """Build the run config, injecting tool credentials from settings.
+
+    Headless API callers don't have a UI session, so the platform bearer token
+    and GitLab PAT fall back to the values configured in the environment.
+    """
+    return {
+        "configurable": {
+            "thread_id": thread_id,
+            "bearer_token": settings.api_bearer_token,
+            "gitlab_token": settings.gitlab_token,
+        }
+    }
 
 
 def _extract_interrupt(result: Any) -> Any | None:

@@ -88,6 +88,10 @@ def _ensure_session() -> None:
         st.session_state.thread_id = str(uuid.uuid4())
     if "pending_interrupt" not in st.session_state:
         st.session_state.pending_interrupt = None
+    if "bearer_api_token" not in st.session_state:
+        st.session_state.bearer_api_token = ""
+    if "gitlab_token" not in st.session_state:
+        st.session_state.gitlab_token = ""
 
 
 def _switch_thread(thread_id: str) -> None:
@@ -95,11 +99,34 @@ def _switch_thread(thread_id: str) -> None:
     st.session_state.pending_interrupt = None
 
 
+def _delete_thread(agent, thread_id: str) -> None:
+    """Permanently delete a conversation: checkpoints + stored title.
+
+    Mirrors the server-side deletion in `api/router.py`. If the deleted
+    thread is the active one, start a fresh conversation.
+    """
+    try:
+        agent.checkpointer.delete_thread(thread_id)
+    except AttributeError:
+        # Older checkpointer versions may not expose delete_thread.
+        pass
+    title_store.delete_title(settings.db_path, thread_id)
+    if st.session_state.thread_id == thread_id:
+        st.session_state.thread_id = str(uuid.uuid4())
+        st.session_state.pending_interrupt = None
+
+
 # --- helpers -----------------------------------------------------------------
 
 
 def _thread_config(thread_id: str) -> dict[str, Any]:
-    return {"configurable": {"thread_id": thread_id}}
+    return {
+        "configurable": {
+            "thread_id": thread_id,
+            "bearer_token": st.session_state.get("bearer_api_token", ""),
+            "gitlab_token": st.session_state.get("gitlab_token", ""),
+        }
+    }
 
 
 def parse_json_recursively(content: Any) -> Any:
@@ -285,6 +312,23 @@ def _sidebar(agent) -> None:
             st.rerun()
 
         st.divider()
+        st.caption("API Authentication")
+        st.text_input(
+            "Bearer token",
+            key="bearer_api_token",
+            type="password",
+            placeholder="Paste token here…",
+            help="Used automatically when the agent calls the platform/servers REST API.",
+        )
+        st.text_input(
+            "GitLab PAT",
+            key="gitlab_token",
+            type="password",
+            placeholder="Paste GitLab token here…",
+            help="GitLab Personal Access Token used by the code-research subagent.",
+        )
+
+        st.divider()
         st.caption("Previous conversations")
 
         threads = _load_thread_list()
@@ -296,13 +340,23 @@ def _sidebar(agent) -> None:
             for t in threads:
                 is_active = t["thread_id"] == active
                 label = ("▶  " if is_active else "   ") + t["label"]
-                if st.button(
+                col_sel, col_del = st.columns([0.82, 0.18], vertical_alignment="center")
+                if col_sel.button(
                     label,
                     key=f"thread_{t['thread_id']}",
                     use_container_width=True,
                     type="secondary",
                 ):
                     _switch_thread(t["thread_id"])
+                    st.rerun()
+                if col_del.button(
+                    "",
+                    icon=":material/delete:",
+                    key=f"del_{t['thread_id']}",
+                    use_container_width=True,
+                    help="Delete this conversation",
+                ):
+                    _delete_thread(agent, t["thread_id"])
                     st.rerun()
 
 
@@ -315,8 +369,13 @@ def render() -> None:
     _sidebar(agent)
 
     thread_id = st.session_state.thread_id
-    st.title("Chat")
-    st.caption(f"Thread: `{thread_id[:8]}…`")
+    col_title, col_info = st.columns([0.92, 0.08], vertical_alignment="center")
+    with col_title:
+        st.title("DICE Agent")
+    with col_info:
+        with st.popover("i", help="Conversation details", use_container_width=True):
+            st.markdown("**Thread id**")
+            st.code(thread_id, language="text")
 
     _render_history(agent, thread_id)
 

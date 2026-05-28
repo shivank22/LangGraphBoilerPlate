@@ -75,6 +75,20 @@ def save_title(db_path: str | Path, thread_id: str, title: str) -> None:
         logger.warning("title_store.save_title failed: %s", exc)
 
 
+def delete_title(db_path: str | Path, thread_id: str) -> None:
+    """Remove the stored title for `thread_id`, if any."""
+    try:
+        conn = _connect(db_path)
+        conn.execute(
+            "DELETE FROM conversation_titles WHERE thread_id = ?", (thread_id,)
+        )
+        conn.commit()
+        conn.close()
+        logger.debug("title_store.delete_title thread_id=%s", thread_id)
+    except Exception as exc:
+        logger.warning("title_store.delete_title failed: %s", exc)
+
+
 def get_all_titles(db_path: str | Path) -> dict[str, str]:
     """Return all stored titles as {thread_id: title}."""
     try:

@@ -22,6 +22,11 @@ data/*.sqlite-journal
 data/*.sqlite-wal
 data/*.sqlite-shm
 
+# Deep agent workspace — ignore runtime canvas/scratch files, keep skills
+agent_workspace/*
+!agent_workspace/skills/
+!agent_workspace/skills/**
+
 # OS / editor
 .DS_Store
 .idea/
