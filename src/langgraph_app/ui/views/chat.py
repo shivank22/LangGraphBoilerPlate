@@ -250,17 +250,39 @@ def _run_agent(agent, payload: Any, thread_id: str) -> None:
 
 
 def _render_hitl(agent, interrupt_payload: Any, thread_id: str) -> None:
-    requests = interrupt_payload if isinstance(interrupt_payload, list) else [interrupt_payload]
+    """Render the approval UI for a HumanInTheLoopMiddleware interrupt.
+
+    The interrupt value is a `HITLRequest`:
+        {"action_requests": [{"name", "args", "description"}, ...],
+         "review_configs":  [{"action_name", "allowed_decisions"}, ...]}
+
+    Resuming requires `Command(resume={"decisions": [<decision>, ...]})`, one
+    decision per action request, in order. Decision shapes:
+        approve -> {"type": "approve"}
+        edit    -> {"type": "edit", "edited_action": {"name", "args"}}
+        reject  -> {"type": "reject", "message": "..."}
+    """
+    payload = interrupt_payload if isinstance(interrupt_payload, dict) else {}
+    action_requests = payload.get("action_requests") or []
+    review_configs = payload.get("review_configs") or []
+
     st.markdown("### Approve tool call")
     st.caption("The agent paused before running a tool. Approve, edit the arguments, or reject.")
 
-    decisions: list[dict[str, Any]] = []
-    for idx, request in enumerate(requests):
-        request_dict = request if isinstance(request, dict) else {}
-        action_request = request_dict.get("action_request", {})
-        tool_name = action_request.get("action") or request_dict.get("name") or "tool"
-        tool_args = action_request.get("args") or request_dict.get("args") or {}
-        description = request_dict.get("description") or ""
+    if not action_requests:
+        st.warning("Nothing to approve (empty interrupt payload).")
+        return
+
+    pending: list[dict[str, Any]] = []
+    for idx, request in enumerate(action_requests):
+        request = request if isinstance(request, dict) else {}
+        tool_name = request.get("name") or "tool"
+        tool_args = request.get("args") or {}
+        description = request.get("description") or ""
+
+        config = review_configs[idx] if idx < len(review_configs) else {}
+        allowed = [d for d in (config.get("allowed_decisions") or ["approve", "edit", "reject"])
+                   if d != "respond"]
 
         with st.container(border=True):
             st.markdown(f"**Tool:** `{tool_name}`")
@@ -274,29 +296,31 @@ def _render_hitl(agent, interrupt_payload: Any, thread_id: str) -> None:
             )
             choice = st.radio(
                 "Decision",
-                options=["approve", "edit", "reject"],
+                options=allowed,
                 horizontal=True,
                 key=f"hitl_choice_{idx}",
             )
-            decisions.append({"choice": choice, "edited_args_json": edited_args_json})
+            pending.append({"name": tool_name, "choice": choice, "edited_args_json": edited_args_json})
 
     if st.button("Submit decision", type="primary"):
-        resume_payload = []
-        for decision in decisions:
-            if decision["choice"] == "approve":
-                resume_payload.append({"type": "approve"})
-            elif decision["choice"] == "edit":
+        decisions: list[dict[str, Any]] = []
+        for item in pending:
+            if item["choice"] == "edit":
                 try:
-                    args = json.loads(decision["edited_args_json"])
+                    args = json.loads(item["edited_args_json"])
                 except json.JSONDecodeError as exc:
                     st.error(f"Edited arguments are not valid JSON: {exc}")
                     return
-                resume_payload.append({"type": "edit", "args": {"args": args}})
-            else:
-                resume_payload.append(
-                    {"type": "reject", "args": "User rejected this tool call."}
+                decisions.append(
+                    {"type": "edit", "edited_action": {"name": item["name"], "args": args}}
                 )
-        _run_agent(agent, Command(resume=resume_payload), thread_id)
+            elif item["choice"] == "reject":
+                decisions.append(
+                    {"type": "reject", "message": "User rejected this tool call."}
+                )
+            else:
+                decisions.append({"type": "approve"})
+        _run_agent(agent, Command(resume={"decisions": decisions}), thread_id)
         st.rerun()
 
 

@@ -100,8 +100,8 @@ src/langgraph_app/
 ├── tools/
 │   ├── __init__.py           # MAIN_TOOLS / RESEARCH_TOOLS / ALL_TOOLS
 │   ├── api_tool.py           # get_weather (kept example)
-│   ├── bearer_api_tool.py    # call_authenticated_api (bearer token, InjectedToolArg)
-│   └── gitlab_tool.py        # gitlab_api (GitLab PAT, InjectedToolArg)
+│   ├── bearer_api_tool.py    # call_authenticated_api (bearer token from run config)
+│   └── gitlab_tool.py        # gitlab_api (GitLab PAT from run config)
 ├── middleware/
 │   ├── guardrails.py         # input length / blocklist / iteration cap
 │   ├── hitl.py               # HumanInTheLoopMiddleware factory (legacy; HITL now via interrupt_on)
@@ -270,7 +270,7 @@ The end-to-end workflow lives in [`agent_workspace/skills/aks-migration/SKILL.md
 | `gitlab_api` | code-researcher subagent | `PRIVATE-TOKEN: <pat>` | Streamlit "GitLab PAT" field, else `GITLAB_TOKEN` |
 | `get_weather` | (kept example) | none | — |
 
-Both authenticated tools mark their credential parameter with `InjectedToolArg`, so the LLM never generates or sees the token — it is injected at runtime from the run config's `configurable`.
+Both authenticated tools receive a `RunnableConfig` parameter that LangChain injects at runtime and hides from the model, so the LLM never generates or sees the token — each tool reads it from the run config's `configurable` (`bearer_token` / `gitlab_token`).
 
 To add **more** tools: create a module in `tools/`, then add it to `MAIN_TOOLS`, `RESEARCH_TOOLS`, or `ALL_TOOLS` in [`src/langgraph_app/tools/__init__.py`](src/langgraph_app/tools/__init__.py). If a tool is sensitive, add its name to `HITL_TOOLS` so the deep agent's `interrupt_on` gates it.
 

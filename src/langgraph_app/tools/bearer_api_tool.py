@@ -1,21 +1,22 @@
 """Authenticated REST API tool.
 
-Calls any HTTP endpoint with a Bearer token supplied at runtime through
-LangChain's InjectedToolArg mechanism — the LLM never sees or controls
-the token; it is injected from config["configurable"]["bearer_token"].
+Calls any HTTP endpoint with a Bearer token supplied at runtime through the
+run config — the LLM never sees or controls the token; it is read from
+config["configurable"]["bearer_token"].
 
 Usage:
 - The LLM specifies url, method, and optional body/params.
 - The Streamlit UI (or API caller) passes the bearer token via the
-  RunnableConfig configurable dict.
+  RunnableConfig configurable dict, which LangChain injects into the tool.
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Any
 
 import httpx
-from langchain_core.tools import InjectedToolArg, tool
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
 
 from ..config import settings
 
@@ -31,7 +32,7 @@ def call_authenticated_api(
     method: str,
     json_body: dict[str, Any] | None = None,
     query_params: dict[str, Any] | None = None,
-    bearer_token: Annotated[str, InjectedToolArg] = "",
+    config: RunnableConfig = None,  # injected by LangChain; hidden from the model
 ) -> dict[str, Any]:
     """Call an external REST API endpoint using a Bearer token for authentication.
 
@@ -48,7 +49,8 @@ def call_authenticated_api(
         A dict with ``status_code`` (int) and ``data`` (parsed JSON or raw text),
         or an ``error`` key describing what went wrong.
     """
-    token = bearer_token or settings.api_bearer_token
+    configurable = (config or {}).get("configurable", {})
+    token = configurable.get("bearer_token") or settings.api_bearer_token
     if not token:
         return {"error": "Bearer token not configured. Please enter it in the sidebar or .env."}
 
