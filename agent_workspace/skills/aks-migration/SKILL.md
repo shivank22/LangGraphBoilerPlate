@@ -21,19 +21,51 @@ filesystem so nothing is lost between steps.
 
 ## Configuration (fill these in)
 
-- Servers list endpoint: `<SERVERS_ENDPOINT e.g. https://platform.internal/api/v1/servers>`
-- Applications-per-server endpoint: `<APPLICATIONS_ENDPOINT e.g. https://platform.internal/api/v1/servers/{server_id}/applications>`
+- Servers list endpoint: `<SERVERS_ENDPOINT e.g. https://platform.internal/api/v1/{aa_code}/{at_number}/servers>`
+- Applications-per-server endpoint: `<APPLICATIONS_ENDPOINT e.g. https://platform.internal/api/v1/{aa_code}/{at_number}/servers/{server_id}/applications>`
 - GitLab project lookup: use the `code-researcher` subagent; pass the GitLab
   project path or id found on the application record.
 
+## Required identifiers
+
+Before calling any platform API you MUST have two identifiers from the user:
+
+- **AA code** — an application/account code in the form `AA` followed by exactly
+  5 digits. Pattern: `^AA\d{5}$` (example: `AA12345`).
+- **AT number** — a ticket/tenant number in the form `AT` followed by exactly
+  4 digits. Pattern: `^AT\d{4}$` (example: `AT1234`).
+
+These are NOT secrets — collect them in plain conversation (unlike the bearer
+token / GitLab PAT, which are injected automatically and must never be asked
+for).
+
 ## Instructions
+
+### 0. Collect and validate the AA code and AT number
+
+This step runs first and gates everything else.
+
+1. If the user has not already provided both, ask them explicitly, e.g.:
+   "To start the AKS migration assessment I need your **AA code** (looks like
+   `AA12345`) and your **AT number** (looks like `AT1234`)."
+2. Validate each value:
+   - AA code must match `^AA\d{5}$` (the letters `AA` + 5 digits).
+   - AT number must match `^AT\d{4}$` (the letters `AT` + 4 digits).
+3. If either value is missing or fails its pattern, do NOT call any API. Tell
+   the user which value is invalid, show the expected format, and ask again.
+   Repeat until both are valid.
+4. Once both are valid, treat them as `{aa_code}` and `{at_number}` and
+   substitute them into every endpoint URL below. Record them at the top of
+   `/canvas.md` under a "## Request context" section (e.g. `AA code: AA12345`,
+   `AT number: AT1234`) so the run is auditable.
 
 ### 1. Discover servers
 
 Call `call_authenticated_api` with the servers list endpoint:
 
 - `method`: `GET`
-- `url`: the servers endpoint above
+- `url`: the servers endpoint above, with `{aa_code}` and `{at_number}`
+  replaced by the validated values from step 0
 
 Write the raw response to `/servers.json` using `write_file`, then create
 `/canvas.md` (if it does not exist) with a "## Servers" section summarizing the
@@ -45,7 +77,8 @@ For the server(s) relevant to the user's request, call `call_authenticated_api`
 again with the applications endpoint (substituting `{server_id}`):
 
 - `method`: `GET`
-- `url`: the applications endpoint with the server id filled in
+- `url`: the applications endpoint with `{aa_code}`, `{at_number}`, and
+  `{server_id}` all filled in
 
 Save each response to `/applications.json` and append an "## Applications"
 section to `/canvas.md`, including for every application: name, the server it
