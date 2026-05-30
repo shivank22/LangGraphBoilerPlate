@@ -196,6 +196,45 @@ def _render_structured_bot(content_data: Any) -> None:
         _render_bot_text(content_data)
 
 
+def _truncate(text: str, limit: int = 60) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _tool_call_summary(call: dict[str, Any]) -> str:
+    name = call.get("name", "tool")
+    args = call.get("args") or {}
+    if isinstance(args, dict) and args:
+        key = next(iter(args))
+        return f"{name} · {key}={_truncate(args[key])}"
+    return name
+
+
+def _tool_result_summary(name: str, data: Any) -> str:
+    if isinstance(data, dict):
+        if "error" in data:
+            return f"{name} · error: {_truncate(data['error'])}"
+        if "status_code" in data:
+            return f"{name} · status {data['status_code']}"
+    size_kb = len(str(data).encode("utf-8")) / 1024
+    return f"{name} · {size_kb:.1f} KB"
+
+
+def _skill_name_from_call(call: dict[str, Any]) -> str | None:
+    """Return the skill name if `call` is a read_file on a /skills/<name>/SKILL.md path."""
+    if call.get("name") != "read_file":
+        return None
+    path = str((call.get("args") or {}).get("file_path", "")).replace("\\", "/")
+    parts = [p for p in path.split("/") if p]
+    if not parts or not parts[-1].upper().startswith("SKILL"):
+        return None
+    if "skills" in parts:
+        idx = parts.index("skills")
+        if idx + 1 < len(parts):
+            return parts[idx + 1]
+    return None
+
+
 def _render_message(message: Any) -> None:
     if isinstance(message, HumanMessage):
         content_str = message.content if isinstance(message.content, str) else str(message.content)
@@ -209,14 +248,25 @@ def _render_message(message: Any) -> None:
             else:
                 _render_bot_text(data)
         for call in getattr(message, "tool_calls", None) or []:
-            with st.chat_message("assistant", avatar=BOT_AVATAR):
-                st.markdown(f"**Tool call:** `{call.get('name', 'tool')}`")
-                st.code(json.dumps(call.get("args", {}), indent=2), language="json")
+            skill = _skill_name_from_call(call)
+            if skill:
+                st.markdown(
+                    f'<div style="margin:6px 0;"><span style="background:#1f6f3f;'
+                    f'color:#fff;padding:3px 10px;border-radius:12px;font-size:0.85em;">'
+                    f"Using skill: {skill}</span></div>",
+                    unsafe_allow_html=True,
+                )
+        if st.session_state.get("show_tool_activity", False):
+            for call in getattr(message, "tool_calls", None) or []:
+                with st.expander(f"Tool call: {_tool_call_summary(call)}", expanded=False):
+                    st.code(json.dumps(call.get("args", {}), indent=2), language="json")
     elif isinstance(message, ToolMessage):
+        if not st.session_state.get("show_tool_activity", False):
+            return
         content_str = str(message.content).strip() if message.content is not None else ""
         data = parse_json_recursively(content_str) if content_str else None
-        with st.chat_message("assistant", avatar=BOT_AVATAR):
-            st.markdown(f"**Tool result:** `{getattr(message, 'name', None) or 'tool'}`")
+        name = getattr(message, "name", None) or "tool"
+        with st.expander(f"Tool result: {_tool_result_summary(name, data)}", expanded=False):
             if isinstance(data, (dict, list)):
                 st.json(data)
             else:
@@ -350,6 +400,14 @@ def _sidebar(agent) -> None:
             type="password",
             placeholder="Paste GitLab token here…",
             help="GitLab Personal Access Token used by the code-research subagent.",
+        )
+
+        st.divider()
+        st.toggle(
+            "Show tool activity",
+            key="show_tool_activity",
+            value=False,
+            help="Show the agent's tool calls and raw tool results (collapsed). Off = only show replies.",
         )
 
         st.divider()

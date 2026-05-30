@@ -88,10 +88,13 @@ def build_agent():
 
     workspace = _ensure_workspace()
     model = _build_model()
-    # virtual_mode=False: real on-disk paths under root_dir, matching the
-    # documented skills-loading behavior (skills are read from an absolute
-    # <root_dir>/skills path and canvas/scratch files persist to disk).
-    backend = FilesystemBackend(root_dir=workspace, virtual_mode=False)
+    # virtual_mode=True: all agent paths are virtual, anchored at root_dir
+    # (the workspace). A leading-slash path like `/research_canvas.md` or
+    # `/skills/...` therefore resolves UNDER the workspace instead of the real
+    # filesystem root. This is required so the skills' canvas/scratch writes
+    # (which use `/...` paths) succeed; with virtual_mode=False they would hit
+    # the read-only OS root. Files still persist to disk under root_dir.
+    backend = FilesystemBackend(root_dir=workspace, virtual_mode=True)
     checkpointer = get_sqlite_checkpointer(settings.db_path)
 
     research_subagent = {
@@ -111,7 +114,9 @@ def build_agent():
         tools=MAIN_TOOLS,
         system_prompt=settings.system_prompt,
         backend=backend,
-        skills=[str(Path(workspace) / "skills")],
+        # Virtual path under root_dir (the workspace); resolves to
+        # <workspace>/skills via the FilesystemBackend in virtual_mode.
+        skills=["/skills"],
         subagents=[research_subagent],
         middleware=[
             GuardrailMiddleware(
