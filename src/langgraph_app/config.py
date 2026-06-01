@@ -45,6 +45,24 @@ class Settings(BaseSettings):
         ),
     )
 
+    artifacts_isolation: bool = Field(
+        default=True,
+        description=(
+            "When true, wrap the filesystem backend so every artifact the agent "
+            "writes is isolated under `<runs_root>/<thread_id>/<run_hash>/`. This "
+            "stops concurrent/consecutive runs from overwriting each other's "
+            "canvas.md and lets the same skill run twice in one chat keep separate "
+            "outputs. Set false to restore the legacy single shared workspace."
+        ),
+    )
+    artifacts_runs_root: str = Field(
+        default="/runs",
+        description=(
+            "Virtual root (under workspace_dir) for run-scoped artifact folders. "
+            "Files resolve to `<workspace_dir><runs_root>/<thread_id>/<run_hash>/...`."
+        ),
+    )
+
     # --- Credentials for outbound API tools ---------------------------------
     # These are optional fallbacks used by headless callers (e.g. the FastAPI
     # routes). The Streamlit UI supplies them per-session instead and injects

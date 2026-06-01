@@ -15,6 +15,7 @@ from langgraph.types import Command
 
 from langgraph_app.agent import build_agent
 from langgraph_app.config import settings
+from langgraph_app.run_scope import count_human_messages, derive_run_hash
 from langgraph_app.ui import title_store
 
 
@@ -119,14 +120,17 @@ def _delete_thread(agent, thread_id: str) -> None:
 # --- helpers -----------------------------------------------------------------
 
 
-def _thread_config(thread_id: str) -> dict[str, Any]:
-    return {
-        "configurable": {
-            "thread_id": thread_id,
-            "bearer_token": st.session_state.get("bearer_api_token", ""),
-            "gitlab_token": st.session_state.get("gitlab_token", ""),
-        }
+def _thread_config(thread_id: str, run_hash: str | None = None) -> dict[str, Any]:
+    configurable: dict[str, Any] = {
+        "thread_id": thread_id,
+        "bearer_token": st.session_state.get("bearer_api_token", ""),
+        "gitlab_token": st.session_state.get("gitlab_token", ""),
     }
+    if run_hash is not None:
+        # Scopes artifacts to <runs_root>/<thread_id>/<run_hash>/ via
+        # ScopedArtifactBackend (see backends/scoped.py).
+        configurable["run_hash"] = run_hash
+    return {"configurable": configurable}
 
 
 def parse_json_recursively(content: Any) -> Any:
@@ -294,8 +298,18 @@ def _extract_interrupt(result: Any) -> Any | None:
 
 
 def _run_agent(agent, payload: Any, thread_id: str) -> None:
+    # Derive a per-turn run_hash so artifacts are isolated per run. A resume
+    # (Command payload) continues the interrupted turn, so reuse that turn's
+    # index; a fresh message dict starts a new turn.
+    state = agent.get_state(_thread_config(thread_id))
+    messages = state.values.get("messages", []) if state and state.values else []
+    human_count = count_human_messages(messages)
+    is_resume = not isinstance(payload, dict)
+    turn_index = max(human_count - 1, 0) if is_resume else human_count
+    run_hash = derive_run_hash(thread_id, turn_index)
+
     with st.spinner("Thinking..."):
-        result = agent.invoke(payload, config=_thread_config(thread_id))
+        result = agent.invoke(payload, config=_thread_config(thread_id, run_hash))
     st.session_state.pending_interrupt = _extract_interrupt(result)
 
 

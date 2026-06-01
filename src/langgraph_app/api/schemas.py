@@ -59,3 +59,24 @@ class HistoryResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "0.1.0"
+
+
+class ArtifactInfo(BaseModel):
+    path: str = Field(
+        description="Path relative to the thread's artifact root, e.g. '<run_hash>/canvas.md'."
+    )
+    run_hash: str = Field(description="The run folder this artifact belongs to.")
+    size: int = Field(description="File size in bytes.")
+    modified_at: str = Field(description="ISO 8601 last-modified timestamp.")
+
+
+class ArtifactListResponse(BaseModel):
+    thread_id: str
+    artifacts: list[ArtifactInfo]
+
+
+class ArtifactContentResponse(BaseModel):
+    thread_id: str
+    path: str
+    content: str = Field(description="UTF-8 text content (binary files are base64-encoded).")
+    encoding: str = Field(default="utf-8", description="'utf-8' or 'base64'.")

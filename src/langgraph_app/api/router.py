@@ -14,7 +14,9 @@ startup in the lifespan context inside `__init__.py`.
 
 from __future__ import annotations
 
+import base64
 import logging
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -22,7 +24,11 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from ..config import settings
+from ..run_scope import count_human_messages, derive_run_hash
 from .schemas import (
+    ArtifactContentResponse,
+    ArtifactInfo,
+    ArtifactListResponse,
     ChatRequest,
     ChatResponse,
     HealthResponse,
@@ -39,19 +45,43 @@ router = APIRouter()
 # --- helpers -----------------------------------------------------------------
 
 
-def _thread_config(thread_id: str) -> dict[str, Any]:
+def _thread_config(thread_id: str, run_hash: str | None = None) -> dict[str, Any]:
     """Build the run config, injecting tool credentials from settings.
 
     Headless API callers don't have a UI session, so the platform bearer token
     and GitLab PAT fall back to the values configured in the environment.
+
+    ``run_hash`` (when provided) scopes the artifacts written during this run to
+    ``<runs_root>/<thread_id>/<run_hash>/`` via ``ScopedArtifactBackend``.
     """
-    return {
-        "configurable": {
-            "thread_id": thread_id,
-            "bearer_token": settings.api_bearer_token,
-            "gitlab_token": settings.gitlab_token,
-        }
+    configurable: dict[str, Any] = {
+        "thread_id": thread_id,
+        "bearer_token": settings.api_bearer_token,
+        "gitlab_token": settings.gitlab_token,
     }
+    if run_hash is not None:
+        configurable["run_hash"] = run_hash
+    return {"configurable": configurable}
+
+
+def _run_config_for_new_turn(agent, thread_id: str) -> dict[str, Any]:
+    """Run config for a fresh user message: a new turn index -> new run_hash."""
+    state = agent.get_state(_thread_config(thread_id))
+    messages = state.values.get("messages", []) if state and state.values else []
+    turn_index = count_human_messages(messages)
+    return _thread_config(thread_id, derive_run_hash(thread_id, turn_index))
+
+
+def _run_config_for_resume(agent, thread_id: str) -> dict[str, Any]:
+    """Run config for a HITL resume: reuse the interrupted turn's run_hash.
+
+    The triggering human message is already in state, so the turn index is the
+    current human-message count minus one.
+    """
+    state = agent.get_state(_thread_config(thread_id))
+    messages = state.values.get("messages", []) if state and state.values else []
+    turn_index = max(count_human_messages(messages) - 1, 0)
+    return _thread_config(thread_id, derive_run_hash(thread_id, turn_index))
 
 
 def _extract_interrupt(result: Any) -> Any | None:
@@ -86,6 +116,13 @@ def _get_agent(request: Request):
     return agent
 
 
+def _iso(mtime: float) -> str:
+    """Format a POSIX mtime as an ISO 8601 (UTC) timestamp."""
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+
+
 # --- endpoints ---------------------------------------------------------------
 
 
@@ -103,7 +140,7 @@ def chat(thread_id: str, body: ChatRequest, request: Request) -> ChatResponse:
     `POST /chat/{thread_id}/resume` with your decision.
     """
     agent = _get_agent(request)
-    config = _thread_config(thread_id)
+    config = _run_config_for_new_turn(agent, thread_id)
 
     logger.info("chat thread_id=%s message_len=%d", thread_id, len(body.message))
 
@@ -144,7 +181,7 @@ def resume(thread_id: str, body: ResumeRequest, request: Request) -> ChatRespons
     Pass the decision from the interrupt (approve / edit / reject).
     """
     agent = _get_agent(request)
-    config = _thread_config(thread_id)
+    config = _run_config_for_resume(agent, thread_id)
 
     if body.decision == "approve":
         resume_payload = [{"type": "approve"}]
@@ -225,3 +262,70 @@ def delete_thread(thread_id: str, request: Request) -> dict[str, str]:
 
     logger.info("delete_thread thread_id=%s", thread_id)
     return {"deleted": thread_id}
+
+
+# --- artifacts ---------------------------------------------------------------
+
+
+def _thread_artifacts_dir(thread_id: str) -> Path:
+    """Absolute path to a thread's artifact root on disk.
+
+    Mirrors ScopedArtifactBackend's layout:
+    ``<workspace_dir><runs_root>/<thread_id>/``.
+    """
+    runs_rel = settings.artifacts_runs_root.strip("/")
+    return (Path(settings.workspace_dir) / runs_rel / thread_id).resolve()
+
+
+@router.get("/chat/{thread_id}/artifacts", response_model=ArtifactListResponse, tags=["artifacts"])
+def list_artifacts(thread_id: str) -> ArtifactListResponse:
+    """List all artifact files stored for a thread, across its run folders."""
+    base = _thread_artifacts_dir(thread_id)
+    artifacts: list[ArtifactInfo] = []
+    if base.is_dir():
+        for file in sorted(base.rglob("*")):
+            if not file.is_file():
+                continue
+            rel = file.relative_to(base)
+            stat = file.stat()
+            artifacts.append(
+                ArtifactInfo(
+                    path=rel.as_posix(),
+                    run_hash=rel.parts[0] if rel.parts else "",
+                    size=stat.st_size,
+                    modified_at=_iso(stat.st_mtime),
+                )
+            )
+    return ArtifactListResponse(thread_id=thread_id, artifacts=artifacts)
+
+
+@router.get(
+    "/chat/{thread_id}/artifacts/{artifact_path:path}",
+    response_model=ArtifactContentResponse,
+    tags=["artifacts"],
+)
+def get_artifact(thread_id: str, artifact_path: str) -> ArtifactContentResponse:
+    """Return the content of a single artifact under a thread's run folders."""
+    base = _thread_artifacts_dir(thread_id)
+    target = (base / artifact_path).resolve()
+
+    # Path-traversal guard: target must stay within the thread's artifact root.
+    if base != target and base not in target.parents:
+        raise HTTPException(status_code=400, detail="Invalid artifact path.")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+
+    raw = target.read_bytes()
+    try:
+        content = raw.decode("utf-8")
+        encoding = "utf-8"
+    except UnicodeDecodeError:
+        content = base64.standard_b64encode(raw).decode("ascii")
+        encoding = "base64"
+
+    return ArtifactContentResponse(
+        thread_id=thread_id,
+        path=artifact_path,
+        content=content,
+        encoding=encoding,
+    )

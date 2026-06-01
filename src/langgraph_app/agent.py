@@ -21,6 +21,7 @@ from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
 from langchain_openai import ChatOpenAI
 
+from .backends import ScopedArtifactBackend
 from .checkpointer import get_sqlite_checkpointer
 from .config import settings
 from .middleware import GuardrailMiddleware, LoggingMiddleware
@@ -95,6 +96,18 @@ def build_agent():
     # (which use `/...` paths) succeed; with virtual_mode=False they would hit
     # the read-only OS root. Files still persist to disk under root_dir.
     backend = FilesystemBackend(root_dir=workspace, virtual_mode=True)
+    if settings.artifacts_isolation:
+        # Transparently rewrite artifact paths to
+        # `<runs_root>/<thread_id>/<run_hash>/...` so concurrent conversations
+        # and consecutive runs never clobber each other's scratch files. The
+        # `/skills` library stays shared and read-only (passthrough). thread_id
+        # and run_hash are read from the run config at write time (see
+        # api/router.py and ui/views/chat.py).
+        backend = ScopedArtifactBackend(
+            backend,
+            runs_root=settings.artifacts_runs_root,
+            passthrough=("/skills",),
+        )
     checkpointer = get_sqlite_checkpointer(settings.db_path)
 
     research_subagent = {
@@ -107,6 +120,11 @@ def build_agent():
         "system_prompt": _RESEARCH_SUBAGENT_PROMPT,
         "tools": RESEARCH_TOOLS,
         "model": model,
+        # Don't inherit the top-level HITL gates inside the subagent. Approval
+        # prompts raised inside a `task` subagent surface awkwardly, so we keep
+        # human-in-the-loop at the main-agent level only. Set to a dict like
+        # {"write_file": True} if you DO want to gate the subagent's writes.
+        "interrupt_on": {},
     }
 
     return create_deep_agent(

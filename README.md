@@ -5,6 +5,7 @@ A **LangGraph Deep Agent** that assesses migrating legacy on-prem workloads to m
 - Built with `deepagents.create_deep_agent` — adds a planning tool, a filesystem, subagents, and the **SKILL.md** progressive-disclosure system on top of a standard LangGraph agent.
 - **Skill-driven workflow** ([`agent_workspace/skills/aks-migration/SKILL.md`](agent_workspace/skills/aks-migration/SKILL.md)): discover servers -> find their applications -> research each app's GitLab repo -> recommend AKS migration targets.
 - **FilesystemBackend** persists intermediate results (a `canvas.md` scratchpad plus `servers.json` / `applications.json`) to `agent_workspace/`.
+- **Per-run artifact isolation**: a `ScopedArtifactBackend` wrapper transparently writes every run's files under `agent_workspace/runs/<thread_id>/<run_hash>/`, so parallel conversations and consecutive runs never overwrite each other (see [Artifact isolation](#artifact-isolation)).
 - **Two authenticated tools**: `call_authenticated_api` (platform/servers API, bearer token) and `gitlab_api` (GitLab REST, PAT) — credentials injected at runtime, never seen by the model.
 - **code-researcher subagent** owns the GitLab tool and runs codebase research in isolated context.
 - OpenAI model selectable via env (defaults to `gpt-5.2`); SQLite persistence (`SqliteSaver`) so conversations survive restarts.
@@ -93,9 +94,13 @@ src/langgraph_app/
 ├── server.py                 # monolith launcher (uvicorn + streamlit subprocess)
 ├── checkpointer.py           # SqliteSaver factory
 ├── config.py                 # pydantic-settings -> `settings` singleton
+├── run_scope.py              # derive per-turn run_hash (resume-safe)
+├── backends/
+│   ├── __init__.py           # exports ScopedArtifactBackend
+│   └── scoped.py             # per-thread / per-run artifact path scoping
 ├── api/
 │   ├── __init__.py           # FastAPI app + lifespan
-│   ├── router.py             # /health + /chat endpoints
+│   ├── router.py             # /health + /chat + /artifacts endpoints
 │   └── schemas.py            # request / response models
 ├── tools/
 │   ├── __init__.py           # MAIN_TOOLS / RESEARCH_TOOLS / ALL_TOOLS
@@ -110,9 +115,15 @@ src/langgraph_app/
     └── streamlit_app.py      # chat UI + HITL approve/edit/reject
 
 agent_workspace/              # FilesystemBackend root (gitignored except skills/)
-└── skills/
-    └── aks-migration/
-        └── SKILL.md          # the migration workflow (fill in your endpoints)
+├── skills/
+│   └── aks-migration/
+│       └── SKILL.md          # the migration workflow (fill in your endpoints)
+└── runs/                     # run-scoped artifacts (created at runtime)
+    └── <thread_id>/
+        └── <run_hash>/
+            ├── canvas.md
+            ├── servers.json
+            └── applications.json
 ```
 
 Everything is wired in `agent.py`. The `api/` and `ui/` layers are thin consumers of `build_agent()`.
@@ -196,6 +207,23 @@ curl -X DELETE http://localhost:8000/chat/my-thread-1
 # {"deleted":"my-thread-1"}
 ```
 
+### `GET /chat/{thread_id}/artifacts`
+
+List the artifact files a thread has produced, across all of its run folders.
+
+```bash
+curl http://localhost:8000/chat/my-thread-1/artifacts
+# {"thread_id":"my-thread-1","artifacts":[{"path":"<run_hash>/canvas.md","run_hash":"<run_hash>","size":1234,"modified_at":"..."}]}
+```
+
+### `GET /chat/{thread_id}/artifacts/{artifact_path}`
+
+Fetch the content of a single artifact (path is relative to the thread's artifact root, e.g. `<run_hash>/canvas.md`). Binary files are returned base64-encoded.
+
+```bash
+curl http://localhost:8000/chat/my-thread-1/artifacts/<run_hash>/canvas.md
+```
+
 ---
 
 ## Configuration
@@ -209,6 +237,8 @@ All settings come from environment variables (or a `.env` file at the project ro
 | `TEMPERATURE`          | `0.2`                                | Sampling temperature.                                     |
 | `DB_PATH`              | `data/checkpoints.sqlite`            | SQLite checkpoint file.                                   |
 | `WORKSPACE_DIR`        | `agent_workspace`                    | FilesystemBackend root; skills load from `<dir>/skills`.  |
+| `ARTIFACTS_ISOLATION`  | `true`                               | Isolate each run's artifacts under `<runs_root>/<thread_id>/<run_hash>/`. |
+| `ARTIFACTS_RUNS_ROOT`  | `/runs`                              | Virtual root (under `WORKSPACE_DIR`) for run-scoped artifact folders. |
 | `API_BEARER_TOKEN`     | _empty_                              | Fallback bearer token for the platform API (headless).   |
 | `GITLAB_TOKEN`         | _empty_                              | Fallback GitLab PAT for `gitlab_api` (headless).          |
 | `GITLAB_BASE_URL`      | `https://gitlab.com/api/v4`          | GitLab REST API base URL.                                 |
@@ -299,6 +329,55 @@ The agent is compiled with `SqliteSaver(sqlite3.connect(DB_PATH, check_same_thre
 Both the Streamlit UI and the FastAPI layer share the **same SQLite file**. A conversation started via the API can be continued in the browser and vice versa — as long as the same `thread_id` is used.
 
 > SQLite is great for local dev and single-process deployments. For multi-worker production, switch to `PostgresSaver` — only `checkpointer.py` needs to change.
+
+---
+
+## Artifact isolation
+
+Checkpoints isolate *conversation state* per `thread_id`, but the agent's scratch
+files (`canvas.md`, `servers.json`, ...) are written through the filesystem
+backend, which by default uses one shared directory. That means two
+conversations — or two consecutive runs of the same conversation — would
+overwrite each other's files.
+
+`ScopedArtifactBackend` ([`backends/scoped.py`](src/langgraph_app/backends/scoped.py))
+wraps the `FilesystemBackend` and transparently rewrites artifact paths:
+
+```
+agent writes        ->  on disk
+/canvas.md          ->  agent_workspace/runs/<thread_id>/<run_hash>/canvas.md
+/servers.json       ->  agent_workspace/runs/<thread_id>/<run_hash>/servers.json
+/skills/...         ->  agent_workspace/skills/...        (shared, passthrough)
+```
+
+- `thread_id` comes from the run config (`configurable.thread_id`) — deterministic
+  and safe for parallel runs.
+- `run_hash` is supplied by the caller per turn. The API
+  ([`api/router.py`](src/langgraph_app/api/router.py)) and the Streamlit UI
+  ([`ui/views/chat.py`](src/langgraph_app/ui/views/chat.py)) derive it from the
+  turn index via [`run_scope.py`](src/langgraph_app/run_scope.py), so a HITL
+  **resume** keeps the same `run_hash` as the interrupted turn, while a new
+  message gets a fresh one. Asking for the same skill again later therefore
+  produces a separate folder.
+
+Skills keep writing simple paths like `/canvas.md` — no skill changes are needed
+for isolation. The only case a skill handles itself is running the *same* skill
+twice within a single response/turn (nest under `/skill-name/`, `/skill-name-2/`,
+... — documented in the skill's `## Artifacts` section).
+
+Set `ARTIFACTS_ISOLATION=false` to restore the legacy single shared workspace.
+
+For the full design, behavior matrix, and edge cases, see
+[`docs/artifact-maintenance-system.md`](docs/artifact-maintenance-system.md).
+
+### Swapping the storage target
+
+`ScopedArtifactBackend` and `FilesystemBackend` both implement deepagents'
+`BackendProtocol`. If you later want queryable, database-backed artifacts instead
+of files on disk, swap the backend in [`agent.py`](src/langgraph_app/agent.py) for
+deepagents' `StoreBackend` with a thread-scoped namespace
+(`namespace=lambda rt: (thread_id, "artifacts")`) — it provides the same
+per-thread isolation natively, no wrapper required.
 
 ---
 

@@ -16,15 +16,45 @@ delegate codebase research to the `code-researcher` subagent (which uses the
 GitLab tool), and accumulate intermediate results in a canvas file on the
 filesystem so nothing is lost between steps.
 
-> Replace every `<PLACEHOLDER>` below with the real values. Endpoints are left
-> blank intentionally so they can be filled in for the target environment.
+> DUMMY MODE: the endpoints below currently point at the public
+> [JSONPlaceholder](https://jsonplaceholder.typicode.com) test API so the whole
+> workflow can be exercised end-to-end without a real platform. JSONPlaceholder
+> ignores the bearer token, but `call_authenticated_api` still requires one, so
+> set any non-empty token in the sidebar (or `API_BEARER_TOKEN` in `.env`) —
+> e.g. `dummy-token`. When wiring the real platform, replace the dummy URLs in
+> the Configuration section below.
 
-## Configuration (fill these in)
+## Artifacts
 
-- Servers list endpoint: `<SERVERS_ENDPOINT e.g. https://platform.internal/api/v1/{aa_code}/{at_number}/servers>`
-- Applications-per-server endpoint: `<APPLICATIONS_ENDPOINT e.g. https://platform.internal/api/v1/{aa_code}/{at_number}/servers/{server_id}/applications>`
-- GitLab project lookup: use the `code-researcher` subagent; pass the GitLab
-  project path or id found on the application record.
+Write all artifacts using simple top-level paths like `/canvas.md`,
+`/servers.json`, and `/applications.json`. You do NOT need to add the
+conversation id or a run id to the path — the system automatically isolates
+every run's files under a private per-conversation, per-run folder, so
+parallel conversations and consecutive runs never overwrite each other.
+
+The only case you must handle yourself: if you run this same skill **more than
+once within a single response/turn** (e.g. two separate migration assessments
+back to back), nest each run's files under its own subfolder so they don't
+collide — `/aks-migration/canvas.md` for the first, `/aks-migration-2/canvas.md`
+for the second, and so on (increment the suffix). When you do this, reference
+the subfolder consistently for every file in that run. For the normal case of
+one assessment per turn, just use the top-level paths.
+
+## Configuration (dummy endpoints — swap for the real platform later)
+
+- Servers list endpoint: `https://jsonplaceholder.typicode.com/users`
+  (each returned **user** stands in for a **server**: use `id` as the server id,
+  `name`/`username` as the hostname, and `company.name` as the environment.)
+- Applications-per-server endpoint:
+  `https://jsonplaceholder.typicode.com/users/{server_id}/posts`
+  (each returned **post** stands in for an **application** running on that
+  server: use `id` as the application id and `title` as the application name.)
+- Pass the collected `{aa_code}` and `{at_number}` as query params
+  (`aa_code`, `at_number`) for traceability — the dummy API ignores them.
+- GitLab project lookup: the dummy "applications" have no real GitLab project.
+  Derive a placeholder project path from the application name
+  (e.g. `dummy-group/<slugified-title>`) and pass that to the `code-researcher`
+  subagent; treat its findings as best-effort in dummy mode.
 
 ## Required identifiers
 
@@ -64,25 +94,29 @@ This step runs first and gates everything else.
 Call `call_authenticated_api` with the servers list endpoint:
 
 - `method`: `GET`
-- `url`: the servers endpoint above, with `{aa_code}` and `{at_number}`
-  replaced by the validated values from step 0
+- `url`: `https://jsonplaceholder.typicode.com/users`
+- `query_params`: `{"aa_code": "{aa_code}", "at_number": "{at_number}"}`
+  (passed for traceability; the dummy API ignores them)
 
 Write the raw response to `/servers.json` using `write_file`, then create
 `/canvas.md` (if it does not exist) with a "## Servers" section summarizing the
-servers found (id, hostname, environment, OS).
+servers found. Map each user to a server: `id` -> server id, `name`/`username`
+-> hostname, `company.name` -> environment.
 
 ### 2. Find applications on the relevant server(s)
 
 For the server(s) relevant to the user's request, call `call_authenticated_api`
-again with the applications endpoint (substituting `{server_id}`):
+again with the applications endpoint (substituting `{server_id}` with the chosen
+server's `id`):
 
 - `method`: `GET`
-- `url`: the applications endpoint with `{aa_code}`, `{at_number}`, and
-  `{server_id}` all filled in
+- `url`: `https://jsonplaceholder.typicode.com/users/{server_id}/posts`
+- `query_params`: `{"aa_code": "{aa_code}", "at_number": "{at_number}"}`
 
 Save each response to `/applications.json` and append an "## Applications"
-section to `/canvas.md`, including for every application: name, the server it
-runs on, and its GitLab project path/id.
+section to `/canvas.md`. Map each post to an application: `id` -> application id,
+`title` -> application name, `userId` -> the server it runs on. Derive a
+placeholder GitLab project path from the title (e.g. `dummy-group/<slug>`).
 
 ### 3. Research each application's codebase (delegate)
 
