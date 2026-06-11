@@ -82,7 +82,7 @@ class Settings(BaseSettings):
 
     system_prompt: str = Field(
         default=(
-            "You are a research and migration assistant with access to a Skills "
+            "You are a research and application discovery assistant with access to a Skills "
             "library (listed under the '## Skills System' section of your "
             "context). Each skill is a multi-step workflow. IMPORTANT: Before "
             "answering a request or calling any other tool, check whether a "
@@ -100,9 +100,9 @@ class Settings(BaseSettings):
     )
 
     max_iterations: int = Field(
-        default=8,
+        default=25,
         ge=1,
-        description="Hard cap on model calls per agent run (guardrail).",
+        description="Hard cap on model calls per user turn (guardrail).",
     )
     max_input_chars: int = Field(
         default=8000,

@@ -35,7 +35,7 @@ class ChatResponse(BaseModel):
     )
     interrupted: bool = Field(
         default=False,
-        description="True when HITL middleware paused the graph before a tool call.",
+        description="True when the graph paused for human input (HITL or ask_user).",
     )
     interrupt_payload: Any | None = Field(
         default=None,
@@ -44,10 +44,17 @@ class ChatResponse(BaseModel):
 
 
 class ResumeRequest(BaseModel):
-    decision: str = Field(..., description="One of: 'approve', 'edit', 'reject'.")
+    decision: str | None = Field(
+        default=None,
+        description="For HITL interrupts: one of 'approve', 'edit', 'reject'.",
+    )
     edited_args: dict[str, Any] | None = Field(
         default=None,
         description="Edited tool arguments (only required when decision='edit').",
+    )
+    answer: str | None = Field(
+        default=None,
+        description="For user-input interrupts (ask_user): the user's answer text.",
     )
 
 

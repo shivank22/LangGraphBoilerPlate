@@ -1,0 +1,12 @@
+{
+  "skill": "application-discovery",
+  "phases": [
+    {"id": "collect_aa", "label": "Collect AA number"},
+    {"id": "discover_servers", "label": "Discover servers"},
+    {"id": "discover_applications", "label": "Find applications"},
+    {"id": "load_questionnaire", "label": "Load questionnaire"},
+    {"id": "questionnaire", "label": "Interactive questionnaire"},
+    {"id": "build_artifact", "label": "Build discovery JSON"},
+    {"id": "summarize", "label": "Summarize results"}
+  ]
+}

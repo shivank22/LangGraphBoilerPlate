@@ -16,7 +16,20 @@ from langgraph.types import Command
 from langgraph_app.agent import build_agent
 from langgraph_app.config import settings
 from langgraph_app.run_scope import count_human_messages, derive_run_hash
+from langgraph_app.skill_progress import (
+    STATUS_COMPLETED,
+    STATUS_PENDING,
+    load_phases,
+    mark_waiting_for_interrupt,
+    read_progress,
+    write_progress,
+)
 from langgraph_app.ui import title_store
+from langgraph_app.ui.components.skill_progress import render_skill_progress
+from langgraph_app.ui.components.tool_activity import (
+    render_tool_activity_card,
+    should_show_tool_activity,
+)
 
 
 USER_AVATAR = "\U0001F9D1\u200D\U0001F4BB"  # 🧑‍💻
@@ -89,15 +102,84 @@ def _ensure_session() -> None:
         st.session_state.thread_id = str(uuid.uuid4())
     if "pending_interrupt" not in st.session_state:
         st.session_state.pending_interrupt = None
+    if "current_run_hash" not in st.session_state:
+        st.session_state.current_run_hash = None
     if "bearer_api_token" not in st.session_state:
         st.session_state.bearer_api_token = ""
     if "gitlab_token" not in st.session_state:
         st.session_state.gitlab_token = ""
 
 
+def _hitl_auto_approve_flag_key(thread_id: str) -> str:
+    """Session storage for auto-approve (not bound to a widget key)."""
+    return f"hitl_auto_approve_flag_{thread_id}"
+
+
+def _hitl_auto_approve_toggle_key(thread_id: str) -> str:
+    """Streamlit widget key for the sidebar toggle."""
+    return f"hitl_auto_approve_toggle_{thread_id}"
+
+
+def _hitl_auto_approve_enabled(thread_id: str) -> bool:
+    return bool(st.session_state.get(_hitl_auto_approve_flag_key(thread_id), False))
+
+
+def _set_hitl_auto_approve(thread_id: str, enabled: bool) -> None:
+    st.session_state[_hitl_auto_approve_flag_key(thread_id)] = enabled
+
+
+def _request_hitl_approve_all(thread_id: str) -> None:
+    """Streamlit callback: enable session auto-approve and process on next rerun."""
+    _set_hitl_auto_approve(thread_id, True)
+    st.session_state["hitl_approve_all_pending"] = True
+
+
+def _resolve_display_run_hash(thread_id: str, messages: list[Any]) -> str | None:
+    """Derive the run hash for the active turn from checkpoint message history."""
+    human_count = count_human_messages(messages)
+    if human_count == 0:
+        return None
+    turn_index = max(human_count - 1, 0)
+    return derive_run_hash(thread_id, turn_index)
+
+
+def _sync_pending_interrupt(agent, thread_id: str) -> None:
+    """Refresh pending_interrupt from the agent checkpoint (avoids stale HITL UI)."""
+    state = agent.get_state(_thread_config(thread_id))
+    messages = state.values.get("messages", []) if state and state.values else []
+    run_hash = _resolve_display_run_hash(thread_id, messages) or st.session_state.get(
+        "current_run_hash"
+    )
+    if run_hash:
+        st.session_state.current_run_hash = run_hash
+    config = _thread_config(thread_id, run_hash)
+    st.session_state.pending_interrupt = _extract_interrupt_from_state(agent, config)
+
+
+def _handle_pending_hitl_auto(agent, thread_id: str) -> bool:
+    """Auto-approve a pending HITL interrupt. Returns True when the page should rerun."""
+    pending = st.session_state.pending_interrupt
+    if not _is_hitl_interrupt(pending):
+        st.session_state.pop("hitl_approve_all_pending", None)
+        return False
+    if not (
+        _hitl_auto_approve_enabled(thread_id)
+        or st.session_state.get("hitl_approve_all_pending")
+    ):
+        return False
+
+    _set_hitl_auto_approve(thread_id, True)
+    st.session_state.pop("hitl_approve_all_pending", None)
+    _run_agent(agent, Command(resume={"decisions": [{"type": "approve"}]}), thread_id)
+    _sync_pending_interrupt(agent, thread_id)
+    return True
+
+
 def _switch_thread(thread_id: str) -> None:
     st.session_state.thread_id = thread_id
     st.session_state.pending_interrupt = None
+    st.session_state.current_run_hash = None
+    st.session_state.pop("hitl_approve_all_pending", None)
 
 
 def _delete_thread(agent, thread_id: str) -> None:
@@ -115,6 +197,7 @@ def _delete_thread(agent, thread_id: str) -> None:
     if st.session_state.thread_id == thread_id:
         st.session_state.thread_id = str(uuid.uuid4())
         st.session_state.pending_interrupt = None
+        st.session_state.current_run_hash = None
 
 
 # --- helpers -----------------------------------------------------------------
@@ -205,15 +288,6 @@ def _truncate(text: str, limit: int = 60) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _tool_call_summary(call: dict[str, Any]) -> str:
-    name = call.get("name", "tool")
-    args = call.get("args") or {}
-    if isinstance(args, dict) and args:
-        key = next(iter(args))
-        return f"{name} · {key}={_truncate(args[key])}"
-    return name
-
-
 def _tool_result_summary(name: str, data: Any) -> str:
     if isinstance(data, dict):
         if "error" in data:
@@ -222,6 +296,23 @@ def _tool_result_summary(name: str, data: Any) -> str:
             return f"{name} · status {data['status_code']}"
     size_kb = len(str(data).encode("utf-8")) / 1024
     return f"{name} · {size_kb:.1f} KB"
+
+
+def _render_skill_badge(skill_name: str) -> None:
+    st.markdown(
+        f'<div style="margin:6px 0;"><span style="background:#1f6f3f;'
+        f'color:#fff;padding:3px 10px;border-radius:12px;font-size:0.85em;">'
+        f"Using skill: {skill_name}</span></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _skill_badge_shown_for_run(run_hash: str | None) -> bool:
+    """True when the skill badge was already rendered above the progress panel."""
+    if not run_hash:
+        return False
+    progress = read_progress(st.session_state.thread_id, run_hash)
+    return bool(progress and progress.get("skill"))
 
 
 def _skill_name_from_call(call: dict[str, Any]) -> str | None:
@@ -239,7 +330,26 @@ def _skill_name_from_call(call: dict[str, Any]) -> str | None:
     return None
 
 
-def _render_message(message: Any) -> None:
+def _tool_result_index(messages: list[Any]) -> dict[str, ToolMessage]:
+    """Map tool_call_id -> ToolMessage for pairing with assistant tool calls."""
+    index: dict[str, ToolMessage] = {}
+    for message in messages:
+        if not isinstance(message, ToolMessage):
+            continue
+        call_id = getattr(message, "tool_call_id", None)
+        if call_id:
+            index[str(call_id)] = message
+    return index
+
+
+def _render_message(
+    message: Any,
+    *,
+    tool_results: dict[str, ToolMessage] | None = None,
+    shown_tool_ids: set[str] | None = None,
+    message_index: int = 0,
+    run_hash: str | None = None,
+) -> None:
     if isinstance(message, HumanMessage):
         content_str = message.content if isinstance(message.content, str) else str(message.content)
         _render_user_text(parse_json_recursively(content_str.strip()) if content_str else "")
@@ -253,35 +363,86 @@ def _render_message(message: Any) -> None:
                 _render_bot_text(data)
         for call in getattr(message, "tool_calls", None) or []:
             skill = _skill_name_from_call(call)
-            if skill:
-                st.markdown(
-                    f'<div style="margin:6px 0;"><span style="background:#1f6f3f;'
-                    f'color:#fff;padding:3px 10px;border-radius:12px;font-size:0.85em;">'
-                    f"Using skill: {skill}</span></div>",
-                    unsafe_allow_html=True,
-                )
-        if st.session_state.get("show_tool_activity", False):
-            for call in getattr(message, "tool_calls", None) or []:
-                with st.expander(f"Tool call: {_tool_call_summary(call)}", expanded=False):
-                    st.code(json.dumps(call.get("args", {}), indent=2), language="json")
+            if skill and not _skill_badge_shown_for_run(run_hash):
+                _render_skill_badge(skill)
+        tool_results = tool_results or {}
+        shown_tool_ids = shown_tool_ids if shown_tool_ids is not None else set()
+        for call_index, call in enumerate(getattr(message, "tool_calls", None) or []):
+            tool_name = str(call.get("name", "tool"))
+            if not should_show_tool_activity(tool_name):
+                continue
+            call_id = str(call.get("id", ""))
+            result_message = tool_results.get(call_id) if call_id else None
+            render_tool_activity_card(
+                call,
+                result_message,
+                key_suffix=f"{message_index}_{call_index}_{call_id}",
+            )
+            if call_id:
+                shown_tool_ids.add(call_id)
     elif isinstance(message, ToolMessage):
-        if not st.session_state.get("show_tool_activity", False):
+        call_id = str(getattr(message, "tool_call_id", "") or "")
+        if shown_tool_ids is not None and call_id in shown_tool_ids:
+            return
+        tool_name = getattr(message, "name", None) or "tool"
+        if not should_show_tool_activity(str(tool_name)):
             return
         content_str = str(message.content).strip() if message.content is not None else ""
         data = parse_json_recursively(content_str) if content_str else None
-        name = getattr(message, "name", None) or "tool"
-        with st.expander(f"Tool result: {_tool_result_summary(name, data)}", expanded=False):
+        with st.expander(f"Tool result: {_tool_result_summary(tool_name, data)}", expanded=False):
             if isinstance(data, (dict, list)):
                 st.json(data)
             else:
                 st.write(data)
 
 
+def _progress_is_visible(progress: dict[str, Any] | None) -> bool:
+    if not progress or not progress.get("skill"):
+        return False
+    phases = progress.get("phases") or {}
+    return any(
+        (phase or {}).get("status") != STATUS_PENDING for phase in phases.values()
+    )
+
+
+def _progress_insert_index(messages: list[Any], thread_id: str) -> int | None:
+    """Index of the human message after which the skill progress panel is shown."""
+    run_hash = _resolve_display_run_hash(thread_id, messages)
+    if not run_hash:
+        return None
+    progress = read_progress(thread_id, run_hash)
+    if not _progress_is_visible(progress):
+        return None
+    human_indices = [i for i, msg in enumerate(messages) if isinstance(msg, HumanMessage)]
+    if not human_indices:
+        return None
+    return human_indices[-1]
+
+
 def _render_history(agent, thread_id: str) -> None:
     state = agent.get_state(_thread_config(thread_id))
     messages = state.values.get("messages", []) if state and state.values else []
-    for msg in messages:
-        _render_message(msg)
+    run_hash = _resolve_display_run_hash(thread_id, messages) or st.session_state.get(
+        "current_run_hash"
+    )
+    if run_hash:
+        st.session_state.current_run_hash = run_hash
+    progress_after = _progress_insert_index(messages, thread_id)
+    tool_results = _tool_result_index(messages)
+    shown_tool_ids: set[str] = set()
+
+    for index, msg in enumerate(messages):
+        _render_message(
+            msg,
+            tool_results=tool_results,
+            shown_tool_ids=shown_tool_ids,
+            message_index=index,
+            run_hash=run_hash,
+        )
+        if index == progress_after and run_hash:
+            placeholder = st.empty()
+            st.session_state.skill_progress_placeholder = placeholder
+            _update_progress_panel(placeholder, thread_id, run_hash)
 
 
 # --- agent invocation --------------------------------------------------------
@@ -297,6 +458,105 @@ def _extract_interrupt(result: Any) -> Any | None:
     return getattr(first, "value", first)
 
 
+def _extract_interrupt_from_state(agent, config: dict[str, Any]) -> Any | None:
+    state = agent.get_state(config)
+    if state and getattr(state, "interrupts", None):
+        first = state.interrupts[0]
+        return getattr(first, "value", first)
+    return None
+
+
+def _phase_status(progress: dict[str, Any], phase_id: str) -> str:
+    phase = progress.get("phases", {}).get(phase_id, {})
+    return str(phase.get("status", STATUS_PENDING))
+
+
+def _reconcile_run_progress(thread_id: str, run_hash: str | None) -> None:
+    """Mark earlier phases complete when a later phase has already finished."""
+    if not run_hash:
+        return
+    progress = read_progress(thread_id, run_hash)
+    if not progress or not progress.get("skill"):
+        return
+    phase_ids = [phase["id"] for phase in load_phases(str(progress["skill"]))]
+    if not phase_ids:
+        return
+    last_completed_index = -1
+    for index, phase_id in enumerate(phase_ids):
+        if _phase_status(progress, phase_id) == STATUS_COMPLETED:
+            last_completed_index = index
+    if last_completed_index <= 0:
+        return
+    phases = progress.setdefault("phases", {})
+    for index in range(last_completed_index):
+        phase_id = phase_ids[index]
+        if _phase_status(progress, phase_id) != STATUS_COMPLETED:
+            phases[phase_id] = {"status": STATUS_COMPLETED}
+    write_progress(thread_id, run_hash, progress)
+
+
+def _update_progress_panel(
+    placeholder: Any,
+    thread_id: str,
+    run_hash: str | None,
+) -> None:
+    if placeholder is None or not run_hash:
+        return
+    _reconcile_run_progress(thread_id, run_hash)
+    progress = read_progress(thread_id, run_hash)
+    if not progress:
+        placeholder.empty()
+        return
+    skill_name = str(progress.get("skill", ""))
+    phases = load_phases(skill_name)
+    with placeholder.container():
+        if skill_name:
+            _render_skill_badge(skill_name)
+        render_skill_progress(progress, phases)
+
+
+def _mark_interrupt_progress(
+    thread_id: str,
+    run_hash: str,
+    interrupt_payload: Any,
+) -> None:
+    if _is_hitl_interrupt(interrupt_payload):
+        requests = interrupt_payload.get("action_requests") or []
+        if not requests:
+            return
+        request = requests[0] if isinstance(requests[0], dict) else {}
+        mark_waiting_for_interrupt(
+            thread_id,
+            run_hash,
+            tool_name=str(request.get("name", "call_authenticated_api")),
+            args=request.get("args") or {},
+        )
+    else:
+        mark_waiting_for_interrupt(thread_id, run_hash, tool_name="ask_user")
+
+
+def _drain_hitl_auto_approvals(
+    agent,
+    thread_id: str,
+    config: dict[str, Any],
+    placeholder: Any,
+    run_hash: str,
+) -> None:
+    """Auto-approve sequential HITL interrupts while session auto-approve is on."""
+    while _hitl_auto_approve_enabled(thread_id):
+        interrupt = _extract_interrupt_from_state(agent, config)
+        if not _is_hitl_interrupt(interrupt):
+            break
+        for _chunk in agent.stream(
+            Command(resume={"decisions": [{"type": "approve"}]}),
+            config=config,
+            stream_mode="values",
+        ):
+            _update_progress_panel(placeholder, thread_id, run_hash)
+        _reconcile_run_progress(thread_id, run_hash)
+        _update_progress_panel(placeholder, thread_id, run_hash)
+
+
 def _run_agent(agent, payload: Any, thread_id: str) -> None:
     # Derive a per-turn run_hash so artifacts are isolated per run. A resume
     # (Command payload) continues the interrupted turn, so reuse that turn's
@@ -307,84 +567,140 @@ def _run_agent(agent, payload: Any, thread_id: str) -> None:
     is_resume = not isinstance(payload, dict)
     turn_index = max(human_count - 1, 0) if is_resume else human_count
     run_hash = derive_run_hash(thread_id, turn_index)
+    st.session_state.current_run_hash = run_hash
+    config = _thread_config(thread_id, run_hash)
+    placeholder = st.session_state.get("skill_progress_placeholder")
 
     with st.spinner("Thinking..."):
-        result = agent.invoke(payload, config=_thread_config(thread_id, run_hash))
-    st.session_state.pending_interrupt = _extract_interrupt(result)
+        for _chunk in agent.stream(payload, config=config, stream_mode="values"):
+            _update_progress_panel(placeholder, thread_id, run_hash)
+
+        _drain_hitl_auto_approvals(agent, thread_id, config, placeholder, run_hash)
+
+    _reconcile_run_progress(thread_id, run_hash)
+    interrupt = _extract_interrupt_from_state(agent, config)
+    st.session_state.pending_interrupt = interrupt
+    if interrupt is not None:
+        hitl = _is_hitl_interrupt(interrupt)
+        if not (hitl and _hitl_auto_approve_enabled(thread_id)):
+            _mark_interrupt_progress(thread_id, run_hash, interrupt)
+    _update_progress_panel(placeholder, thread_id, run_hash)
+
+
+def _is_hitl_interrupt(interrupt_payload: Any) -> bool:
+    """True when the interrupt is a tool-approval request from HITL middleware."""
+    return isinstance(interrupt_payload, dict) and bool(interrupt_payload.get("action_requests"))
+
+
+def _render_user_input(agent, interrupt_payload: Any, thread_id: str) -> None:
+    """Render a form for ``ask_user`` / LangGraph ``interrupt()`` user-input pauses."""
+    if isinstance(interrupt_payload, dict):
+        question = interrupt_payload.get("question") or "Please provide your answer:"
+        dropdown_values = interrupt_payload.get("dropdown_values") or []
+    else:
+        question = str(interrupt_payload)
+        dropdown_values = []
+
+    st.markdown("### Your input is needed")
+    st.caption("The agent paused to collect your answer before continuing.")
+
+    with st.container(border=True):
+        if dropdown_values:
+            answer = st.selectbox(
+                question,
+                options=dropdown_values,
+                key="user_input_select",
+            )
+        else:
+            answer = st.text_input(question, key="user_input_text")
+
+        if st.button("Submit answer", type="primary"):
+            _run_agent(agent, Command(resume=answer), thread_id)
+            st.rerun()
 
 
 def _render_hitl(agent, interrupt_payload: Any, thread_id: str) -> None:
-    """Render the approval UI for a HumanInTheLoopMiddleware interrupt.
+    """Render approval UI for a single gated tool call.
 
-    The interrupt value is a `HITLRequest`:
-        {"action_requests": [{"name", "args", "description"}, ...],
-         "review_configs":  [{"action_name", "allowed_decisions"}, ...]}
-
-    Resuming requires `Command(resume={"decisions": [<decision>, ...]})`, one
-    decision per action request, in order. Decision shapes:
-        approve -> {"type": "approve"}
-        edit    -> {"type": "edit", "edited_action": {"name", "args"}}
-        reject  -> {"type": "reject", "message": "..."}
+    Sequential HITL middleware emits one ``action_requests`` entry per interrupt.
+    Resume with ``Command(resume={"decisions": [<decision>]})``.
     """
+    if _hitl_auto_approve_enabled(thread_id):
+        return
+
     payload = interrupt_payload if isinstance(interrupt_payload, dict) else {}
     action_requests = payload.get("action_requests") or []
     review_configs = payload.get("review_configs") or []
 
     st.markdown("### Approve tool call")
-    st.caption("The agent paused before running a tool. Approve, edit the arguments, or reject.")
+    st.caption(
+        "The agent paused before running one tool. Approve, edit the arguments, "
+        "or reject. Additional gated tools in this turn will prompt separately "
+        "unless auto-approve is enabled."
+    )
 
     if not action_requests:
         st.warning("Nothing to approve (empty interrupt payload).")
         return
 
-    pending: list[dict[str, Any]] = []
-    for idx, request in enumerate(action_requests):
-        request = request if isinstance(request, dict) else {}
-        tool_name = request.get("name") or "tool"
-        tool_args = request.get("args") or {}
-        description = request.get("description") or ""
+    request = action_requests[0] if isinstance(action_requests[0], dict) else {}
+    tool_name = request.get("name") or "tool"
+    tool_args = request.get("args") or {}
+    description = request.get("description") or ""
 
-        config = review_configs[idx] if idx < len(review_configs) else {}
-        allowed = [d for d in (config.get("allowed_decisions") or ["approve", "edit", "reject"])
-                   if d != "respond"]
+    config = review_configs[0] if review_configs else {}
+    allowed = [
+        d
+        for d in (config.get("allowed_decisions") or ["approve", "edit", "reject"])
+        if d != "respond"
+    ]
 
-        with st.container(border=True):
-            st.markdown(f"**Tool:** `{tool_name}`")
-            if description:
-                st.caption(description)
-            edited_args_json = st.text_area(
-                "Arguments (edit before approving if needed):",
-                value=json.dumps(tool_args, indent=2),
-                key=f"hitl_args_{idx}",
-                height=140,
-            )
-            choice = st.radio(
-                "Decision",
-                options=allowed,
-                horizontal=True,
-                key=f"hitl_choice_{idx}",
-            )
-            pending.append({"name": tool_name, "choice": choice, "edited_args_json": edited_args_json})
+    with st.container(border=True):
+        st.markdown(f"**Tool:** `{tool_name}`")
+        if description:
+            st.caption(description)
+        edited_args_json = st.text_area(
+            "Arguments (edit before approving if needed):",
+            value=json.dumps(tool_args, indent=2),
+            key="hitl_args",
+            height=140,
+        )
+        choice = st.radio(
+            "Decision",
+            options=allowed,
+            horizontal=True,
+            key="hitl_choice",
+        )
 
-    if st.button("Submit decision", type="primary"):
-        decisions: list[dict[str, Any]] = []
-        for item in pending:
-            if item["choice"] == "edit":
-                try:
-                    args = json.loads(item["edited_args_json"])
-                except json.JSONDecodeError as exc:
-                    st.error(f"Edited arguments are not valid JSON: {exc}")
-                    return
-                decisions.append(
-                    {"type": "edit", "edited_action": {"name": item["name"], "args": args}}
-                )
-            elif item["choice"] == "reject":
-                decisions.append(
-                    {"type": "reject", "message": "User rejected this tool call."}
-                )
-            else:
-                decisions.append({"type": "approve"})
-        _run_agent(agent, Command(resume={"decisions": decisions}), thread_id)
+    col_once, col_all = st.columns(2)
+    with col_once:
+        submit_once = st.button("Submit decision", type="primary", use_container_width=True)
+    with col_all:
+        st.button(
+            "Approve all for this conversation",
+            use_container_width=True,
+            help="Approve this tool and automatically approve every remaining "
+            "gated tool call in this conversation.",
+            on_click=_request_hitl_approve_all,
+            args=(thread_id,),
+        )
+
+    if submit_once:
+        if choice == "edit":
+            try:
+                args = json.loads(edited_args_json)
+            except json.JSONDecodeError as exc:
+                st.error(f"Edited arguments are not valid JSON: {exc}")
+                return
+            decision: dict[str, Any] = {
+                "type": "edit",
+                "edited_action": {"name": tool_name, "args": args},
+            }
+        elif choice == "reject":
+            decision = {"type": "reject", "message": "User rejected this tool call."}
+        else:
+            decision = {"type": "approve"}
+        _run_agent(agent, Command(resume={"decisions": [decision]}), thread_id)
         st.rerun()
 
 
@@ -397,6 +713,7 @@ def _sidebar(agent) -> None:
         if st.button("+ New conversation", type="primary", use_container_width=True):
             st.session_state.thread_id = str(uuid.uuid4())
             st.session_state.pending_interrupt = None
+            st.session_state.current_run_hash = None
             st.rerun()
 
         st.divider()
@@ -405,8 +722,9 @@ def _sidebar(agent) -> None:
             "Bearer token",
             key="bearer_api_token",
             type="password",
-            placeholder="Paste token here…",
-            help="Used automatically when the agent calls the platform/servers REST API.",
+            placeholder="1234 for mock API",
+            help="Used automatically when the agent calls the platform/servers REST API. "
+            "Mock discovery endpoints require `1234`.",
         )
         st.text_input(
             "GitLab PAT",
@@ -417,11 +735,26 @@ def _sidebar(agent) -> None:
         )
 
         st.divider()
+        st.caption("Tool approvals")
+        thread_id = st.session_state.thread_id
+        toggle_key = _hitl_auto_approve_toggle_key(thread_id)
+        st.session_state[toggle_key] = _hitl_auto_approve_enabled(thread_id)
         st.toggle(
-            "Show tool activity",
+            "Auto-approve gated tools (this conversation)",
+            key=toggle_key,
+            help="When enabled, write_file, edit_file, call_authenticated_api, and "
+            "other HITL-gated tools are approved automatically for this conversation. "
+            "Questionnaire prompts (ask_user) still require your input.",
+        )
+        _set_hitl_auto_approve(thread_id, st.session_state[toggle_key])
+
+        st.divider()
+        st.toggle(
+            "Show all tool activity",
             key="show_tool_activity",
             value=False,
-            help="Show the agent's tool calls and raw tool results (collapsed). Off = only show replies.",
+            help="Also show non-HITL tool calls (read_file, write_file, questionnaire, etc.). "
+            "HITL-approved API calls are always visible.",
         )
 
         st.divider()
@@ -475,8 +808,24 @@ def render() -> None:
 
     _render_history(agent, thread_id)
 
+    _sync_pending_interrupt(agent, thread_id)
+
     if st.session_state.pending_interrupt is not None:
-        _render_hitl(agent, st.session_state.pending_interrupt, thread_id)
+        if _is_hitl_interrupt(st.session_state.pending_interrupt):
+            auto_processed = False
+            for _ in range(20):
+                if not _handle_pending_hitl_auto(agent, thread_id):
+                    break
+                auto_processed = True
+                _sync_pending_interrupt(agent, thread_id)
+                if not _is_hitl_interrupt(st.session_state.pending_interrupt):
+                    break
+            if auto_processed:
+                st.rerun()
+                return
+            _render_hitl(agent, st.session_state.pending_interrupt, thread_id)
+        else:
+            _render_user_input(agent, st.session_state.pending_interrupt, thread_id)
         return
 
     prompt = st.chat_input("Message the agent...")
@@ -484,6 +833,8 @@ def render() -> None:
         return
 
     _render_user_text(prompt)
+    progress_placeholder = st.empty()
+    st.session_state.skill_progress_placeholder = progress_placeholder
     _run_agent(agent, {"messages": [HumanMessage(content=prompt)]}, thread_id)
 
     # After the first user+assistant exchange, generate an LLM title once.

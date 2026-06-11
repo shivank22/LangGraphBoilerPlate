@@ -1,0 +1,19 @@
+{
+  "_comment": "Example discovery artifact schema. Replace this file with your own structure; keep discovery-artifact.mapping.json in sync with your JSON paths.",
+  "aa_code": null,
+  "schema_version": "1.0",
+  "discovered_at": null,
+  "infrastructure": {
+    "servers": [],
+    "applications": []
+  },
+  "questionnaire": {
+    "responses": []
+  },
+  "metadata": {
+    "sources": {
+      "servers_endpoint": "GET /mock/discovery/{aa_code}/servers",
+      "applications_endpoint": "GET /mock/discovery/{aa_code}/servers/{server_id}/applications"
+    }
+  }
+}

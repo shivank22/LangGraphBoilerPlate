@@ -3,7 +3,7 @@
 A **LangGraph Deep Agent** that assesses migrating legacy on-prem workloads to managed **Azure Kubernetes Service (AKS)**.
 
 - Built with `deepagents.create_deep_agent` — adds a planning tool, a filesystem, subagents, and the **SKILL.md** progressive-disclosure system on top of a standard LangGraph agent.
-- **Skill-driven workflow** ([`agent_workspace/skills/aks-migration/SKILL.md`](agent_workspace/skills/aks-migration/SKILL.md)): discover servers -> find their applications -> research each app's GitLab repo -> recommend AKS migration targets.
+- **Skill-driven workflow** ([`agent_workspace/skills/application-discovery/SKILL.md`](agent_workspace/skills/application-discovery/SKILL.md)): discover servers and applications via APIs, then run an interactive Excel questionnaire to capture application details for a given AA number.
 - **FilesystemBackend** persists intermediate results (a `canvas.md` scratchpad plus `servers.json` / `applications.json`) to `agent_workspace/`.
 - **Per-run artifact isolation**: a `ScopedArtifactBackend` wrapper transparently writes every run's files under `agent_workspace/runs/<thread_id>/<run_hash>/`, so parallel conversations and consecutive runs never overwrite each other (see [Artifact isolation](#artifact-isolation)).
 - **Two authenticated tools**: `call_authenticated_api` (platform/servers API, bearer token) and `gitlab_api` (GitLab REST, PAT) — credentials injected at runtime, never seen by the model.
@@ -68,8 +68,8 @@ flowchart TD
             AG["build_agent() -> create_deep_agent"]
             MW["GuardrailMiddleware + LoggingMiddleware + planning/filesystem/skills"]
             Model["ChatOpenAI"]
-            Skill["SKILL.md: aks-migration"]
-            Tools["call_authenticated_api (bearer)"]
+            Skill["SKILL.md: application-discovery"]
+            Tools["call_authenticated_api + questionnaire tools"]
             Sub["code-researcher subagent -> gitlab_api (PAT)"]
             FS["FilesystemBackend\nagent_workspace/canvas.md"]
         end
@@ -106,6 +106,7 @@ src/langgraph_app/
 │   ├── __init__.py           # MAIN_TOOLS / RESEARCH_TOOLS / ALL_TOOLS
 │   ├── api_tool.py           # get_weather (kept example)
 │   ├── bearer_api_tool.py    # call_authenticated_api (bearer token from run config)
+│   ├── questionnaire_tool.py # load/save application discovery questionnaire (Excel)
 │   └── gitlab_tool.py        # gitlab_api (GitLab PAT from run config)
 ├── middleware/
 │   ├── guardrails.py         # input length / blocklist / iteration cap
@@ -116,8 +117,9 @@ src/langgraph_app/
 
 agent_workspace/              # FilesystemBackend root (gitignored except skills/)
 ├── skills/
-│   └── aks-migration/
-│       └── SKILL.md          # the migration workflow (fill in your endpoints)
+│   └── application-discovery/
+│       ├── SKILL.md          # discovery workflow (APIs + questionnaire)
+│       └── questionnaire.template.xlsx
 └── runs/                     # run-scoped artifacts (created at runtime)
     └── <thread_id>/
         └── <run_hash>/
@@ -243,7 +245,7 @@ All settings come from environment variables (or a `.env` file at the project ro
 | `GITLAB_TOKEN`         | _empty_                              | Fallback GitLab PAT for `gitlab_api` (headless).          |
 | `GITLAB_BASE_URL`      | `https://gitlab.com/api/v4`          | GitLab REST API base URL.                                 |
 | `SYSTEM_PROMPT`        | AKS migration assistant              | Base system prompt.                                       |
-| `MAX_ITERATIONS`       | `8`                                  | Guardrail: hard cap on model calls per run.               |
+| `MAX_ITERATIONS`       | `25`                                 | Guardrail: hard cap on model calls per user turn.         |
 | `MAX_INPUT_CHARS`      | `8000`                               | Guardrail: reject user turns longer than this.            |
 | `GUARDRAIL_BLOCKLIST`  | _empty_                              | Comma-separated, case-insensitive substring blocklist.    |
 | `HITL_TOOLS`           | `call_authenticated_api`             | Comma-separated tool names that pause for human approval. |
@@ -260,7 +262,7 @@ Order matters — outer middleware wraps inner.
 ### 1. `GuardrailMiddleware` (custom)
 
 - `before_agent`: rejects fresh user input that is too long or matches the blocklist. Short-circuits with `jump_to: "end"` and a polite refusal message.
-- `before_model`: caps total `AIMessage` count per run to prevent runaway loops.
+- `before_model`: caps `AIMessage` count per user turn (since the latest human message) to prevent runaway loops.
 
 ### 2. `LoggingMiddleware` (custom)
 
@@ -280,23 +282,29 @@ Uses the stdlib `logging` module — pipe it anywhere (stdout, files, structured
 
 ---
 
-## The migration skill
+## Application discovery skill
 
-The end-to-end workflow lives in [`agent_workspace/skills/aks-migration/SKILL.md`](agent_workspace/skills/aks-migration/SKILL.md). The deep agent reads it on demand (progressive disclosure) when a prompt matches the skill's `description`, then follows its steps:
+The end-to-end workflow lives in [`agent_workspace/skills/application-discovery/SKILL.md`](agent_workspace/skills/application-discovery/SKILL.md). The deep agent reads it on demand (progressive disclosure) when a prompt matches the skill's `description`, then follows its steps:
 
-1. `GET` the **servers** endpoint via `call_authenticated_api`; save to `/servers.json`.
-2. `GET` the **applications-per-server** endpoint; save to `/applications.json`.
-3. Delegate each app to the **code-researcher** subagent, which uses `gitlab_api` to inspect the repo.
-4. Append findings to `/canvas.md` after each step.
-5. Produce AKS migration target recommendations citing the canvas.
+1. Collect and validate the user's **AA number** (e.g. `AA12345`).
+2. `GET` the **servers** endpoint via `call_authenticated_api`; save to `/servers.json`.
+3. `GET` the **applications-per-server** endpoint; save to `/applications.json`.
+4. Load the questionnaire via `load_application_questionnaire`; collect each unanswered question via `ask_user` (renders a dropdown or text field in the UI).
+5. Persist each answer with `save_questionnaire_answer` to a per-AA Excel workbook under `questionnaires/`.
+6. Append API and questionnaire findings to `/canvas.md` and summarize for the user.
 
-**To use it against your environment:** open the `SKILL.md` and replace the `<PLACEHOLDER>` endpoints with your real URLs. No code change required.
+**To customize questions:** edit `questionnaire.template.xlsx` in the skill folder (columns: `Question`, `DropDownValues`, `Answer`). **To use real APIs:** open `SKILL.md` and replace the dummy endpoints with your platform URLs.
+
+**Live progress UI:** each skill can define execution phases in `phases.json` (see [`application-discovery/phases.json`](agent_workspace/skills/application-discovery/phases.json)). The Streamlit chat shows a step list (done / in progress / waiting / pending) that updates live during the run via `SkillProgressMiddleware`.
 
 ## Tools and credentials
 
 | Tool | Used by | Auth | Credential source |
 |------|---------|------|-------------------|
 | `call_authenticated_api` | main agent | `Authorization: Bearer <token>` | Streamlit "Bearer token" field, else `API_BEARER_TOKEN` |
+| `load_application_questionnaire` | main agent | none | — |
+| `save_questionnaire_answer` | main agent | none | — |
+| `ask_user` | main agent | none | Pauses for structured user input (dropdown or text) via UI interrupt |
 | `gitlab_api` | code-researcher subagent | `PRIVATE-TOKEN: <pat>` | Streamlit "GitLab PAT" field, else `GITLAB_TOKEN` |
 | `get_weather` | (kept example) | none | — |
 

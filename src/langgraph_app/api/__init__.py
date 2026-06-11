@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from langgraph_app.agent import build_agent
 
+from .mock_discovery import router as mock_discovery_router
 from .router import router
 
 
@@ -46,3 +47,4 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(mock_discovery_router)

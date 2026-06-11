@@ -75,8 +75,9 @@ The two scope components come from the LangGraph run config
 ```
 agent_workspace/
 ├── skills/                         # shared, read-only (passthrough)
-│   └── aks-migration/
-│       └── SKILL.md
+│   └── application-discovery/
+│       ├── SKILL.md
+│       └── questionnaire.template.xlsx
 └── runs/                           # created at runtime
     └── <thread_id>/
         ├── <run_hash_turn_1>/
@@ -148,7 +149,7 @@ Callers compute the index from the thread's current state:
 | [`src/langgraph_app/api/router.py`](../src/langgraph_app/api/router.py) | `_thread_config()` accepts `run_hash`; new-turn and resume configs derive it; new artifact list/fetch endpoints. |
 | [`src/langgraph_app/api/schemas.py`](../src/langgraph_app/api/schemas.py) | New: `ArtifactInfo`, `ArtifactListResponse`, `ArtifactContentResponse`. |
 | [`src/langgraph_app/ui/views/chat.py`](../src/langgraph_app/ui/views/chat.py) | `_thread_config()` accepts `run_hash`; `_run_agent()` derives it (resume-aware). |
-| [`agent_workspace/skills/aks-migration/SKILL.md`](../agent_workspace/skills/aks-migration/SKILL.md) | Added an `## Artifacts` section for the same-turn repeat-run case. |
+| [`agent_workspace/skills/application-discovery/SKILL.md`](../agent_workspace/skills/application-discovery/SKILL.md) | Application discovery skill with `## Artifacts` section for the same-turn repeat-run case. |
 | [`README.md`](../README.md) | Documented the layout, config vars, endpoints, and the `StoreBackend` swap path. |
 
 ## Configuration

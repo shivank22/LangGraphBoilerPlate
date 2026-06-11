@@ -1,0 +1,10 @@
+{
+  "_comment": "Maps discovery data sources to paths in discovery-artifact.schema.json. Update targets when you replace the schema file.",
+  "mappings": [
+    {"target": "aa_code", "source": "aa_code"},
+    {"target": "discovered_at", "source": "generated.discovered_at"},
+    {"target": "infrastructure.servers", "source": "servers.servers"},
+    {"target": "infrastructure.applications", "source": "generated.applications_flat"},
+    {"target": "questionnaire.responses", "source": "generated.questionnaire_responses"}
+  ]
+}

@@ -24,7 +24,12 @@ from langchain_openai import ChatOpenAI
 from .backends import ScopedArtifactBackend
 from .checkpointer import get_sqlite_checkpointer
 from .config import settings
-from .middleware import GuardrailMiddleware, LoggingMiddleware
+from .middleware import (
+    GuardrailMiddleware,
+    LoggingMiddleware,
+    SkillProgressMiddleware,
+    build_hitl_middleware,
+)
 from .tools import MAIN_TOOLS, RESEARCH_TOOLS
 
 
@@ -79,10 +84,9 @@ def build_agent():
       - model        : ChatOpenAI from settings
       - tools        : MAIN_TOOLS (platform/servers REST API)
       - backend      : FilesystemBackend rooted at settings.workspace_dir
-      - skills       : <workspace_dir>/skills (e.g. aks-migration)
+      - skills       : <workspace_dir>/skills (e.g. application-discovery)
       - subagents    : code-researcher (owns the GitLab tool)
-      - middleware   : Guardrail + Logging (deep agent adds its own)
-      - interrupt_on : HITL approval for tools listed in settings.hitl_tools
+      - middleware   : Guardrail + Logging + Skill progress + sequential HITL
       - checkpointer : SqliteSaver
     """
     _configure_logging()
@@ -143,7 +147,8 @@ def build_agent():
                 blocklist=settings.guardrail_blocklist,
             ),
             LoggingMiddleware(),
+            SkillProgressMiddleware(),
+            build_hitl_middleware(),
         ],
-        interrupt_on={name: True for name in settings.hitl_tools},
         checkpointer=checkpointer,
     )

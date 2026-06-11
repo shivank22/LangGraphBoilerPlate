@@ -13,15 +13,38 @@ Tool groups
 from .api_tool import get_weather
 from .bearer_api_tool import call_authenticated_api
 from .gitlab_tool import gitlab_api
+from .llm_tool import call_custom_llm
+from .discovery_artifact_tool import build_discovery_artifact
+from .questionnaire_tool import (
+    load_application_questionnaire,
+    save_questionnaire_answer,
+)
+from .user_input_tool import ask_user
 
-# Tools the main migration agent uses directly.
-MAIN_TOOLS = [call_authenticated_api]
+# Tools the main discovery agent uses directly.
+MAIN_TOOLS = [
+    call_authenticated_api,
+    call_custom_llm,
+    load_application_questionnaire,
+    save_questionnaire_answer,
+    build_discovery_artifact,
+    ask_user,
+]
 
 # Tools reserved for the code-research subagent (isolated context).
 RESEARCH_TOOLS = [gitlab_api]
 
 # Everything, including the original example tool.
-ALL_TOOLS = [get_weather, call_authenticated_api, gitlab_api]
+ALL_TOOLS = [
+    get_weather,
+    call_authenticated_api,
+    call_custom_llm,
+    load_application_questionnaire,
+    save_questionnaire_answer,
+    build_discovery_artifact,
+    ask_user,
+    gitlab_api,
+]
 
 __all__ = [
     "ALL_TOOLS",
@@ -29,5 +52,10 @@ __all__ = [
     "RESEARCH_TOOLS",
     "get_weather",
     "call_authenticated_api",
+    "call_custom_llm",
+    "build_discovery_artifact",
+    "load_application_questionnaire",
+    "save_questionnaire_answer",
+    "ask_user",
     "gitlab_api",
 ]

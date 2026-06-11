@@ -6,9 +6,9 @@ LLM provider:
 - `before_agent`: validates fresh user input (length + blocklist). On
   violation, append a refusal `AIMessage` and short-circuit with
   `jump_to="end"`.
-- `before_model`: caps the number of model calls per agent run to prevent
-  runaway loops. On the cap, append an explanatory `AIMessage` and
-  short-circuit with `jump_to="end"`.
+- `before_model`: caps the number of model calls **in the current user turn**
+  (since the latest human message) to prevent runaway loops. On the cap,
+  append an explanatory `AIMessage` and short-circuit with `jump_to="end"`.
 """
 
 from __future__ import annotations
@@ -23,6 +23,17 @@ from langchain_core.messages import AIMessage, HumanMessage
 logger = logging.getLogger("langgraph_app.middleware.guardrails")
 
 
+def _ai_messages_in_current_turn(messages: list[Any]) -> int:
+    """Count assistant messages since the latest human message in this turn."""
+    last_human_idx = -1
+    for idx in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[idx], HumanMessage):
+            last_human_idx = idx
+            break
+    turn_messages = messages[last_human_idx + 1 :]
+    return sum(1 for message in turn_messages if isinstance(message, AIMessage))
+
+
 class GuardrailMiddleware(AgentMiddleware):
     """Basic, deterministic guardrails: input validation + iteration cap."""
 
@@ -31,7 +42,7 @@ class GuardrailMiddleware(AgentMiddleware):
     def __init__(
         self,
         *,
-        max_iterations: int = 8,
+        max_iterations: int = 25,
         max_input_chars: int = 8000,
         blocklist: list[str] | None = None,
     ) -> None:
@@ -86,7 +97,7 @@ class GuardrailMiddleware(AgentMiddleware):
 
     def before_model(self, state, runtime) -> dict[str, Any] | None:  # type: ignore[override]
         messages = state.get("messages", []) if isinstance(state, dict) else []
-        ai_calls = sum(1 for m in messages if isinstance(m, AIMessage))
+        ai_calls = _ai_messages_in_current_turn(messages)
 
         if ai_calls >= self.max_iterations:
             logger.warning(

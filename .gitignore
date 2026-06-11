@@ -26,6 +26,8 @@ data/*.sqlite-shm
 agent_workspace/*
 !agent_workspace/skills/
 !agent_workspace/skills/**
+# Per-AA questionnaire answers (template stays tracked)
+agent_workspace/skills/application-discovery/questionnaires/*.xlsx
 
 # OS / editor
 .DS_Store

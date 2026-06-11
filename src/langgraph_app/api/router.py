@@ -176,15 +176,21 @@ def chat(thread_id: str, body: ChatRequest, request: Request) -> ChatResponse:
 
 @router.post("/chat/{thread_id}/resume", response_model=ChatResponse, tags=["chat"])
 def resume(thread_id: str, body: ResumeRequest, request: Request) -> ChatResponse:
-    """Resume a graph that was interrupted by HumanInTheLoopMiddleware.
+    """Resume a graph that was interrupted for human input.
 
-    Pass the decision from the interrupt (approve / edit / reject).
+    For ``ask_user`` interrupts, pass ``answer``. For HITL tool approval,
+    pass ``decision`` (approve / edit / reject).
     """
     agent = _get_agent(request)
     config = _run_config_for_resume(agent, thread_id)
 
-    if body.decision == "approve":
+    if body.answer is not None:
+        logger.info("resume thread_id=%s user_input", thread_id)
+        result = agent.invoke(Command(resume=body.answer), config=config)
+    elif body.decision == "approve":
         resume_payload = [{"type": "approve"}]
+        logger.info("resume thread_id=%s decision=%s", thread_id, body.decision)
+        result = agent.invoke(Command(resume=resume_payload), config=config)
     elif body.decision == "edit":
         if body.edited_args is None:
             raise HTTPException(
@@ -192,18 +198,22 @@ def resume(thread_id: str, body: ResumeRequest, request: Request) -> ChatRespons
                 detail="edited_args is required when decision='edit'.",
             )
         resume_payload = [{"type": "edit", "args": {"args": body.edited_args}}]
+        logger.info("resume thread_id=%s decision=%s", thread_id, body.decision)
+        result = agent.invoke(Command(resume=resume_payload), config=config)
     elif body.decision == "reject":
         resume_payload = [
             {"type": "reject", "args": "User rejected this tool call via API."}
         ]
+        logger.info("resume thread_id=%s decision=%s", thread_id, body.decision)
+        result = agent.invoke(Command(resume=resume_payload), config=config)
     else:
         raise HTTPException(
             status_code=422,
-            detail=f"Unknown decision '{body.decision}'. Use approve, edit, or reject.",
+            detail=(
+                "Provide either 'answer' (user-input interrupt) or 'decision' "
+                "(approve, edit, reject for HITL)."
+            ),
         )
-
-    logger.info("resume thread_id=%s decision=%s", thread_id, body.decision)
-    result = agent.invoke(Command(resume=resume_payload), config=config)
 
     interrupt_payload = _extract_interrupt(result)
     interrupted = interrupt_payload is not None
