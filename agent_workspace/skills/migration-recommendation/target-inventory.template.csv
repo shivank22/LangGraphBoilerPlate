@@ -1,0 +1,5 @@
+Region,Environment,ClusterName,NodePool,Capacity,CpuCores,MemoryGb,StorageGb,PreferredRuntimes,Notes
+DC-East,Prod,aks-prod-east-01,general,available,16,64,512,"Java 17,Node.js 20",Primary prod landing zone
+DC-East,Prod,aks-prod-east-02,memory,available,8,128,256,"Java 17",Memory-heavy workloads
+DC-West,QA,aks-qa-west-01,general,available,8,32,256,"Node.js 20,Python 3.11",QA validation cluster
+DC-West,Prod,aks-prod-west-01,general,limited,16,64,512,"Java 17,Python 3.11",Use when East is at capacity

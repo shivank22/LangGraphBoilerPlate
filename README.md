@@ -3,7 +3,10 @@
 A **LangGraph Deep Agent** that assesses migrating legacy on-prem workloads to managed **Azure Kubernetes Service (AKS)**.
 
 - Built with `deepagents.create_deep_agent` — adds a planning tool, a filesystem, subagents, and the **SKILL.md** progressive-disclosure system on top of a standard LangGraph agent.
-- **Skill-driven workflow** ([`agent_workspace/skills/application-discovery/SKILL.md`](agent_workspace/skills/application-discovery/SKILL.md)): discover servers and applications via APIs, then run an interactive Excel questionnaire to capture application details for a given AA number.
+- **Skill-driven workflow** — two skills documented in [`docs/skills/`](docs/skills/README.md):
+  - **[Application discovery](docs/skills/application-discovery.md)** — APIs + questionnaire → `discovery-artifact.json`
+  - **[Migration recommendation](docs/skills/migration-recommendation.md)** — scores + inventory → `migration-recommendation.json`
+- Agent instructions live in [`agent_workspace/skills/`](agent_workspace/skills/).
 - **FilesystemBackend** persists intermediate results (a `canvas.md` scratchpad plus `servers.json` / `applications.json`) to `agent_workspace/`.
 - **Per-run artifact isolation**: a `ScopedArtifactBackend` wrapper transparently writes every run's files under `agent_workspace/runs/<thread_id>/<run_hash>/`, so parallel conversations and consecutive runs never overwrite each other (see [Artifact isolation](#artifact-isolation)).
 - **Two authenticated tools**: `call_authenticated_api` (platform/servers API, bearer token) and `gitlab_api` (GitLab REST, PAT) — credentials injected at runtime, never seen by the model.

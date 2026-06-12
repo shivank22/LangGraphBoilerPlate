@@ -1,0 +1,6 @@
+EntityType,EntityId,EntityName,Score,Notes
+server,1,app-server-01,0.88,Prod workload; strong containerization signals
+server,2,app-server-02,0.45,QA server; legacy dependencies remain
+application,101,Customer Portal,0.92,Java 17; good AKS fit
+application,102,Billing Service,0.76,Node.js 20; moderate complexity
+application,201,Reporting API,0.61,Python 3.11; needs dependency review

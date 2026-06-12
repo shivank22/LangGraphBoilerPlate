@@ -65,6 +65,16 @@ def describe_tool_call(call: dict[str, Any]) -> str:
         aa = args.get("aa_code")
         return f"AA {aa}" if aa else "discovery JSON"
 
+    if name == "load_migration_scores":
+        aa = args.get("aa_code")
+        return f"scores AA {aa}" if aa else "migration scores"
+
+    if name == "load_target_inventory":
+        return "target inventory"
+
+    if name == "build_migration_recommendation":
+        return f"min_score={args.get('min_score', 0.7)}"
+
     if name == "read_file":
         return _truncate(str(args.get("file_path", "")))
 
@@ -93,6 +103,20 @@ def describe_tool_result(tool_name: str, data: Any) -> str:
             servers = data.get("server_count")
             if apps is not None and servers is not None:
                 return f"{servers} servers, {apps} applications"
+        if tool_name == "load_migration_scores":
+            valid = data.get("valid_score_count")
+            total = data.get("total")
+            if valid is not None and total is not None:
+                return f"{valid}/{total} valid scores"
+        if tool_name == "load_target_inventory":
+            avail = data.get("available_count")
+            total = data.get("total")
+            if avail is not None and total is not None:
+                return f"{avail}/{total} clusters available"
+        if tool_name == "build_migration_recommendation":
+            eligible = data.get("eligible_count")
+            if eligible is not None:
+                return f"{eligible} eligible for migration"
         if tool_name == "load_application_questionnaire":
             return (
                 f"{data.get('answered_count', 0)}/{data.get('total', 0)} answered"

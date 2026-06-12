@@ -189,9 +189,19 @@ def _infer_waiting_phase(
             return "discover_applications"
         if path.endswith("canvas.md"):
             return "summarize"
+        if path.endswith("migration-recommendation.json"):
+            return "build_recommendation"
+        if path.endswith("migration-canvas.md"):
+            return "summarize"
 
     if tool_name == "build_discovery_artifact":
         return "build_artifact"
+
+    if tool_name == "build_migration_recommendation":
+        return "build_recommendation"
+
+    if tool_name in {"load_migration_scores", "load_target_inventory"}:
+        return progress.get("current_phase") or phase_ids[0]
 
     return str(progress.get("current_phase") or phase_ids[0])
 
@@ -246,9 +256,11 @@ def apply_tool_call(
     flags = progress.setdefault("flags", {})
 
     if tool_name == "read_file":
-        path = str(args.get("file_path", ""))
+        path = str(args.get("file_path", "")).replace("\\", "/")
         if skill_name_from_skill_path(path) == skill:
             _set_phase(progress, phase_ids[0], STATUS_IN_PROGRESS)
+        elif skill == "migration-recommendation" and path.endswith("discovery-artifact.json"):
+            _complete_and_start_next(progress, "load_discovery", "load_scores")
         write_progress(thread_id, run_hash, progress)
         return progress
 
@@ -275,6 +287,15 @@ def apply_tool_call(
 
     if skill == "application-discovery":
         progress = _apply_application_discovery(
+            progress,
+            tool_name=tool_name,
+            args=args,
+            parsed=parsed,
+            phase_ids=phase_ids,
+            flags=flags,
+        )
+    elif skill == "migration-recommendation":
+        progress = _apply_migration_recommendation(
             progress,
             tool_name=tool_name,
             args=args,
@@ -382,6 +403,43 @@ def _apply_application_discovery(
         if _phase_status(progress, "summarize") == STATUS_IN_PROGRESS:
             content = str(args.get("content", ""))
             if "Questionnaire responses" in content or "## Questionnaire" in content:
+                _set_phase(progress, "summarize", STATUS_COMPLETED)
+                progress["current_phase"] = "summarize"
+
+    _reconcile_progress_phases(progress, phase_ids)
+    return progress
+
+
+def _apply_migration_recommendation(
+    progress: dict[str, Any],
+    *,
+    tool_name: str,
+    args: dict[str, Any],
+    parsed: Any,
+    phase_ids: list[str],
+    flags: dict[str, Any],
+) -> dict[str, Any]:
+    if tool_name == "load_migration_scores":
+        if isinstance(parsed, dict) and "error" not in parsed:
+            _complete_and_start_next(progress, "load_scores", "assess_eligibility")
+
+    elif tool_name == "load_target_inventory":
+        if isinstance(parsed, dict) and "error" not in parsed:
+            if not _is_phase_completed(progress, "assess_eligibility"):
+                _set_phase(progress, "assess_eligibility", STATUS_COMPLETED)
+            _complete_and_start_next(progress, "load_inventory", "build_recommendation")
+
+    elif tool_name == "build_migration_recommendation":
+        if isinstance(parsed, dict) and "error" not in parsed:
+            _complete_and_start_next(progress, "build_recommendation", "summarize")
+
+    elif tool_name in {"write_file", "edit_file"}:
+        path = str(args.get("file_path", "")).replace("\\", "/")
+        if path.endswith("migration-recommendation.json"):
+            if _phase_status(progress, "build_recommendation") != STATUS_COMPLETED:
+                _complete_and_start_next(progress, "build_recommendation", "summarize")
+        elif path.endswith("migration-canvas.md"):
+            if _phase_status(progress, "summarize") == STATUS_IN_PROGRESS:
                 _set_phase(progress, "summarize", STATUS_COMPLETED)
                 progress["current_phase"] = "summarize"
 

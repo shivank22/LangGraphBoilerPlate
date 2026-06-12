@@ -15,6 +15,11 @@ from .bearer_api_tool import call_authenticated_api
 from .gitlab_tool import gitlab_api
 from .llm_tool import call_custom_llm
 from .discovery_artifact_tool import build_discovery_artifact
+from .migration_recommendation_tool import (
+    build_migration_recommendation,
+    load_migration_scores,
+    load_target_inventory,
+)
 from .questionnaire_tool import (
     load_application_questionnaire,
     save_questionnaire_answer,
@@ -28,6 +33,9 @@ MAIN_TOOLS = [
     load_application_questionnaire,
     save_questionnaire_answer,
     build_discovery_artifact,
+    load_migration_scores,
+    load_target_inventory,
+    build_migration_recommendation,
     ask_user,
 ]
 
@@ -42,6 +50,9 @@ ALL_TOOLS = [
     load_application_questionnaire,
     save_questionnaire_answer,
     build_discovery_artifact,
+    load_migration_scores,
+    load_target_inventory,
+    build_migration_recommendation,
     ask_user,
     gitlab_api,
 ]
@@ -54,6 +65,9 @@ __all__ = [
     "call_authenticated_api",
     "call_custom_llm",
     "build_discovery_artifact",
+    "build_migration_recommendation",
+    "load_migration_scores",
+    "load_target_inventory",
     "load_application_questionnaire",
     "save_questionnaire_answer",
     "ask_user",

@@ -1,0 +1,20 @@
+{
+  "_comment": "Example migration recommendation output. Written to /migration-recommendation.json by the skill.",
+  "aa_code": null,
+  "schema_version": "1.0",
+  "generated_at": null,
+  "min_score_threshold": 0.7,
+  "discovery_source": "/discovery-artifact.json",
+  "scores_source": null,
+  "inventory_source": null,
+  "summary": {
+    "total_servers": 0,
+    "total_applications": 0,
+    "eligible_servers": 0,
+    "eligible_applications": 0,
+    "recommended_targets_used": 0
+  },
+  "eligible_entities": [],
+  "ineligible_entities": [],
+  "recommendations": []
+}

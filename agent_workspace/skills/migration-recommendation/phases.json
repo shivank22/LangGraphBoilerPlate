@@ -1,0 +1,11 @@
+{
+  "skill": "migration-recommendation",
+  "phases": [
+    {"id": "load_discovery", "label": "Load discovery JSON"},
+    {"id": "load_scores", "label": "Load migration scores"},
+    {"id": "assess_eligibility", "label": "Assess migration eligibility"},
+    {"id": "load_inventory", "label": "Load target inventory"},
+    {"id": "build_recommendation", "label": "Build recommendation JSON"},
+    {"id": "summarize", "label": "Summarize recommendations"}
+  ]
+}
