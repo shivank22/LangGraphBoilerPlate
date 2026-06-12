@@ -10,7 +10,18 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class ChatRequest(BaseModel):
+class CredentialsMixin(BaseModel):
+    bearer_token: str | None = Field(
+        default=None,
+        description="Bearer token for platform API calls (overrides env fallback).",
+    )
+    gitlab_token: str | None = Field(
+        default=None,
+        description="GitLab PAT for code-research subagent (overrides env fallback).",
+    )
+
+
+class ChatRequest(CredentialsMixin):
     message: str = Field(..., description="The user's message text.")
 
 
@@ -25,10 +36,18 @@ class MessageOut(BaseModel):
         default=None,
         description="For role='tool': the name of the tool that produced this result.",
     )
+    tool_call_id: str | None = Field(
+        default=None,
+        description="For role='tool': the assistant tool_call id this result belongs to.",
+    )
 
 
 class ChatResponse(BaseModel):
     thread_id: str
+    run_hash: str | None = Field(
+        default=None,
+        description="Run hash for the active turn (artifact + progress scope).",
+    )
     reply: str = Field(description="The last assistant text reply.")
     messages: list[MessageOut] = Field(
         description="All new messages produced this turn (user + assistant + tool)."
@@ -43,10 +62,14 @@ class ChatResponse(BaseModel):
     )
 
 
-class ResumeRequest(BaseModel):
+class ResumeRequest(CredentialsMixin):
     decision: str | None = Field(
         default=None,
         description="For HITL interrupts: one of 'approve', 'edit', 'reject'.",
+    )
+    tool_name: str | None = Field(
+        default=None,
+        description="Tool name (required for decision='edit').",
     )
     edited_args: dict[str, Any] | None = Field(
         default=None,
@@ -66,6 +89,44 @@ class HistoryResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "0.1.0"
+
+
+class ThreadInfo(BaseModel):
+    thread_id: str
+    label: str
+    short_id: str
+
+
+class ThreadListResponse(BaseModel):
+    threads: list[ThreadInfo]
+
+
+class ThreadTitleResponse(BaseModel):
+    thread_id: str
+    title: str | None
+
+
+class GenerateTitleRequest(BaseModel):
+    user_message: str
+    assistant_reply: str
+
+
+class SkillProgressResponse(BaseModel):
+    thread_id: str
+    run_hash: str
+    progress: dict[str, Any] | None
+    phases: list[dict[str, str]]
+
+
+class ConfigResponse(BaseModel):
+    model_name: str
+    temperature: float
+    max_iterations: int
+    max_input_chars: int
+    guardrail_blocklist: list[str]
+    hitl_tools: list[str]
+    log_level: str
+    db_path: str
 
 
 class ArtifactInfo(BaseModel):

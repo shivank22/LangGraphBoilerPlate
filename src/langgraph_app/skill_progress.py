@@ -73,6 +73,30 @@ def progress_is_visible(progress: dict[str, Any] | None) -> bool:
     )
 
 
+def reconcile_run_progress(thread_id: str, run_hash: str | None) -> None:
+    """Mark earlier phases complete when a later phase has already finished."""
+    if not run_hash:
+        return
+    progress = read_progress(thread_id, run_hash)
+    if not progress or not progress.get("skill"):
+        return
+    phase_ids = [phase["id"] for phase in load_phases(str(progress["skill"]))]
+    if not phase_ids:
+        return
+    last_completed_index = -1
+    for index, phase_id in enumerate(phase_ids):
+        if _phase_status(progress, phase_id) == STATUS_COMPLETED:
+            last_completed_index = index
+    if last_completed_index <= 0:
+        return
+    phases = progress.setdefault("phases", {})
+    for index in range(last_completed_index):
+        phase_id = phase_ids[index]
+        if _phase_status(progress, phase_id) != STATUS_COMPLETED:
+            phases[phase_id] = {"status": STATUS_COMPLETED}
+    write_progress(thread_id, run_hash, progress)
+
+
 def read_progress(thread_id: str, run_hash: str) -> dict[str, Any] | None:
     path = progress_file_path(thread_id, run_hash)
     if not path.is_file():

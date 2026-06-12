@@ -29,6 +29,10 @@ agent_workspace/*
 # Per-AA questionnaire answers (template stays tracked)
 agent_workspace/skills/application-discovery/questionnaires/*.xlsx
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
 # OS / editor
 .DS_Store
 .idea/

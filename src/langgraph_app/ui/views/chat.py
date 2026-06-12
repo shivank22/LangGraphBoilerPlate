@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
-import sqlite3
 import uuid
-from pathlib import Path
 from typing import Any
 
 import streamlit as st
@@ -15,6 +13,8 @@ from langgraph.types import Command
 
 from langgraph_app.agent import build_agent
 from langgraph_app.config import settings
+from langgraph_app.hitl import is_hitl_interrupt
+from langgraph_app.thread_store import load_thread_list
 from langgraph_app.run_scope import count_human_messages, derive_run_hash
 from langgraph_app.skill_progress import (
     STATUS_COMPLETED,
@@ -56,42 +56,6 @@ _BOT_BUBBLE  = _MSG_STYLE + "background: rgba(127, 127, 127, 0.12);"
 @st.cache_resource(show_spinner="Building agent...")
 def _get_agent():
     return build_agent()
-
-
-# --- SQLite conversation list ------------------------------------------------
-
-
-def _load_thread_list() -> list[dict]:
-    """Return threads ordered by most-recently updated.
-
-    Labels come from `conversation_titles` (LLM-generated). Threads that
-    don't yet have a title fall back to the short hash.
-    """
-    db_path = Path(settings.db_path)
-    if not db_path.exists():
-        return []
-    try:
-        conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        rows = conn.execute(
-            """
-            SELECT thread_id, MAX(checkpoint_id) AS latest
-            FROM checkpoints
-            GROUP BY thread_id
-            ORDER BY latest DESC
-            """
-        ).fetchall()
-        conn.close()
-    except Exception:
-        return []
-
-    all_titles = title_store.get_all_titles(db_path)
-
-    threads = []
-    for thread_id, _ in rows:
-        short = thread_id[:8] if len(thread_id) >= 8 else thread_id
-        label = all_titles.get(thread_id) or f"Chat {short}…"
-        threads.append({"thread_id": thread_id, "label": label, "short_id": short})
-    return threads
 
 
 # --- session -----------------------------------------------------------------
@@ -587,11 +551,6 @@ def _run_agent(agent, payload: Any, thread_id: str) -> None:
     _update_progress_panel(placeholder, thread_id, run_hash)
 
 
-def _is_hitl_interrupt(interrupt_payload: Any) -> bool:
-    """True when the interrupt is a tool-approval request from HITL middleware."""
-    return isinstance(interrupt_payload, dict) and bool(interrupt_payload.get("action_requests"))
-
-
 def _render_user_input(agent, interrupt_payload: Any, thread_id: str) -> None:
     """Render a form for ``ask_user`` / LangGraph ``interrupt()`` user-input pauses."""
     if isinstance(interrupt_payload, dict):
@@ -760,7 +719,7 @@ def _sidebar(agent) -> None:
         st.divider()
         st.caption("Previous conversations")
 
-        threads = _load_thread_list()
+        threads = load_thread_list()
         active = st.session_state.thread_id
 
         if not threads:

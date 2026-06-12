@@ -1,26 +1,23 @@
-"""FastAPI application factory.
-
-The `app` object is the single FastAPI instance for the whole service.
-It is importable as `langgraph_app.api:app` for uvicorn.
-
-Lifecycle:
-  - On startup, `build_agent()` is called once and stored on `app.state.agent`.
-    All router endpoints read from `request.app.state.agent`.
-  - On shutdown, nothing special is needed (SQLite connection stays open until
-    process exit, which is fine for a single-process monolith).
-"""
+"""FastAPI application factory."""
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from langgraph_app.agent import build_agent
+from langgraph_app.config import PROJECT_ROOT
 
 from .mock_discovery import router as mock_discovery_router
 from .router import router
+
+
+FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 
 
 @asynccontextmanager
@@ -48,3 +45,16 @@ app.add_middleware(
 
 app.include_router(router)
 app.include_router(mock_discovery_router)
+
+if FRONTEND_DIST.is_dir():
+    assets_dir = FRONTEND_DIST / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    async def spa_index():
+        return FileResponse(FRONTEND_DIST / "index.html")
+
+    @app.get("/info", include_in_schema=False)
+    async def spa_info():
+        return FileResponse(FRONTEND_DIST / "index.html")

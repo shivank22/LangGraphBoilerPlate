@@ -13,8 +13,8 @@ A **LangGraph Deep Agent** that assesses migrating legacy on-prem workloads to m
 - **code-researcher subagent** owns the GitLab tool and runs codebase research in isolated context.
 - OpenAI model selectable via env (defaults to `gpt-5.2`); SQLite persistence (`SqliteSaver`) so conversations survive restarts.
 - **Guardrail** + **Logging** middleware retained; HITL approval via the deep agent's `interrupt_on`.
-- **FastAPI** REST API (:8000) and **Streamlit** chat UI (:8501) with approve / edit / reject HITL flow.
-- Single-process monolith launcher. Managed entirely with **`uv`**. No Docker.
+- **FastAPI** REST API (:8000), **React** chat UI (:5173), and **Streamlit** chat UI (:8501) with approve / edit / reject HITL flow.
+- Single-process monolith launcher with configurable UI via `UI` env var. Managed with **`uv`** + **npm**. No Docker.
 
 ---
 
@@ -26,14 +26,24 @@ cp .env.example .env
 # edit .env and set OPENAI_API_KEY
 ```
 
-### Run everything (FastAPI + Streamlit)
+### Run everything (recommended)
 
 ```bash
-uv run python src/langgraph_app/server.py
+./start.sh
 ```
+
+By default this starts **FastAPI**, **Streamlit**, and the **React** dev server. Control which UIs launch with the `UI` environment variable:
+
+| `UI` value | What starts |
+|---|---|
+| `both` (default) | FastAPI + Streamlit + React dev server |
+| `react` | FastAPI + React dev server |
+| `streamlit` | FastAPI + Streamlit |
+| `none` | FastAPI only |
 
 | Server | URL |
 |---|---|
+| React chat UI | http://localhost:5173 |
 | Streamlit chat UI | http://localhost:8501 |
 | FastAPI REST API | http://localhost:8000 |
 | Interactive API docs | http://localhost:8000/docs |
@@ -41,11 +51,31 @@ uv run python src/langgraph_app/server.py
 ### Run servers individually
 
 ```bash
+# FastAPI + both UIs (same as ./start.sh)
+UI=both uv run python src/langgraph_app/server.py
+
+# React UI only (requires npm install in frontend/)
+UI=react uv run python src/langgraph_app/server.py
+
 # Streamlit only
+UI=streamlit uv run python src/langgraph_app/server.py
+
+# Streamlit standalone (no FastAPI)
 uv run streamlit run src/langgraph_app/ui/streamlit_app.py
 
 # FastAPI only (with hot-reload)
 uv run uvicorn langgraph_app.api:app --reload --port 8000
+
+# React dev server only (proxies API to :8000)
+cd frontend && npm run dev
+```
+
+### Production (serve React from FastAPI)
+
+```bash
+cd frontend && npm run build
+UI=none uv run python src/langgraph_app/server.py
+# React SPA served at http://localhost:8000/
 ```
 
 The SQLite checkpoint database is created on first run at `data/checkpoints.sqlite`.
