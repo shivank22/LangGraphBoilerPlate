@@ -10,7 +10,7 @@ export default function App() {
       <header className="topbar">
         <div className="topbar-left">
           <div className="topbar-brand">
-            <span className="brand-icon">🤖</span>
+            <span className="brand-icon">👾</span>
             <span className="brand-text">DICE Agent</span>
           </div>
           <nav className="nav-links">
@@ -22,10 +22,12 @@ export default function App() {
         </div>
         <ThemeToggle />
       </header>
-      <Routes>
-        <Route path="/" element={<ChatPage />} />
-        <Route path="/info" element={<InfoPage />} />
-      </Routes>
+      <main className="page-shell">
+        <Routes>
+          <Route path="/" element={<ChatPage />} />
+          <Route path="/info" element={<InfoPage />} />
+        </Routes>
+      </main>
     </div>
   );
 }

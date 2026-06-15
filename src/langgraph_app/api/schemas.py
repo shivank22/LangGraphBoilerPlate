@@ -84,6 +84,12 @@ class ResumeRequest(CredentialsMixin):
 class HistoryResponse(BaseModel):
     thread_id: str
     messages: list[MessageOut]
+    interrupted: bool = False
+    interrupt_payload: Any | None = None
+    ui_mode: str = "idle"
+    run_hash: str | None = None
+    progress: dict[str, Any] | None = None
+    phases: list[dict[str, str]] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):

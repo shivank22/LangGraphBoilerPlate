@@ -2,8 +2,10 @@ import type {
   ChatResponse,
   ConfigResponse,
   Credentials,
+  HistoryResponse,
   MessageOut,
   StreamDoneEvent,
+  StreamInterruptEvent,
   StreamProgressEvent,
   ThreadInfo,
 } from "./types";
@@ -31,9 +33,12 @@ export async function listThreads(): Promise<ThreadInfo[]> {
   return data.threads;
 }
 
-export async function getHistory(threadId: string): Promise<MessageOut[]> {
-  const data = await request<{ messages: MessageOut[] }>(`/chat/${threadId}/history`);
-  return data.messages;
+export async function getHistory(threadId: string): Promise<HistoryResponse> {
+  return request<HistoryResponse>(`/chat/${threadId}/history`);
+}
+
+export async function getThreadState(threadId: string): Promise<HistoryResponse> {
+  return request<HistoryResponse>(`/chat/${threadId}/state`);
 }
 
 export async function deleteThread(threadId: string): Promise<void> {
@@ -56,7 +61,7 @@ export interface StreamHandlers {
   onStart?: (runHash: string) => void;
   onProgress?: (data: StreamProgressEvent) => void;
   onMessages?: (messages: MessageOut[]) => void;
-  onInterrupt?: (payload: unknown) => void;
+  onInterrupt?: (data: StreamInterruptEvent) => void;
   onDone?: (data: StreamDoneEvent) => void;
   onError?: (error: Error) => void;
 }
@@ -100,7 +105,7 @@ async function consumeSse(
       if (event === "start") handlers.onStart?.(parsed.run_hash);
       if (event === "progress") handlers.onProgress?.(parsed);
       if (event === "messages") handlers.onMessages?.(parsed.messages);
-      if (event === "interrupt") handlers.onInterrupt?.(parsed.interrupt_payload);
+      if (event === "interrupt") handlers.onInterrupt?.(parsed as StreamInterruptEvent);
       if (event === "done") {
         doneEvent = parsed as StreamDoneEvent;
         handlers.onDone?.(doneEvent);

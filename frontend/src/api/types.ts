@@ -29,6 +29,8 @@ export interface SkillPhase {
 export interface SkillProgress {
   skill?: string;
   phases?: Record<string, { status: string; detail?: string }>;
+  updated_at?: string;
+  current_phase?: string;
 }
 
 export interface ConfigResponse {
@@ -47,7 +49,20 @@ export interface Credentials {
   gitlab_token?: string;
 }
 
-export type ToolStatus = "running" | "completed" | "error";
+export type ToolStatus = "running" | "queued" | "completed" | "error";
+
+export type UiMode = "idle" | "running" | "hitl" | "user_input";
+
+export interface HistoryResponse {
+  thread_id: string;
+  messages: MessageOut[];
+  interrupted?: boolean;
+  interrupt_payload?: unknown;
+  ui_mode?: UiMode;
+  run_hash?: string | null;
+  progress?: SkillProgress | null;
+  phases?: SkillPhase[];
+}
 
 export interface StreamDoneEvent {
   thread_id: string;
@@ -56,8 +71,14 @@ export interface StreamDoneEvent {
   messages: MessageOut[];
   interrupted: boolean;
   interrupt_payload?: unknown;
+  ui_mode?: UiMode;
   progress?: SkillProgress | null;
   phases?: SkillPhase[];
+}
+
+export interface StreamInterruptEvent {
+  interrupt_payload: unknown;
+  ui_mode: UiMode;
 }
 
 export interface StreamProgressEvent {

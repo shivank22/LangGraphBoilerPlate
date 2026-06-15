@@ -28,7 +28,7 @@ uv sync --quiet
 
 if [ "$UI" = "react" ] || [ "$UI" = "both" ]; then
   if [ -f "frontend/package.json" ]; then
-    echo "[INFO]  Installing frontend dependencies..."
+    echo "[INFO]  Installing frontend dependencies (react-markdown, remark-gfm, github-markdown-css, ...)..."
     (cd frontend && npm install --silent)
   else
     echo "[WARN]  frontend/package.json not found — React UI will not start."

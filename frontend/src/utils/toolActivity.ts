@@ -1,5 +1,7 @@
 import type { MessageOut, ToolStatus } from "../api/types";
+import { callMatchesHitlInterrupt, isHitlInterrupt } from "./interrupts";
 import { truncate } from "./message";
+import type { TurnMessage } from "./turns";
 
 export function isHitlTool(toolName: string, hitlTools: string[]): boolean {
   return hitlTools.includes(toolName);
@@ -126,4 +128,57 @@ export function getToolStatus(
     return "error";
   }
   return "completed";
+}
+
+/** Display status for a tool call, accounting for sequential HITL batches. */
+export function getToolDisplayStatus(
+  call: Record<string, unknown>,
+  resultMessage: MessageOut | undefined,
+  resultData: unknown,
+  hitlTools: string[],
+  pendingInterrupt: unknown,
+): ToolStatus {
+  const base = getToolStatus(resultMessage, resultData);
+  if (base !== "running") return base;
+  const toolName = String(call.name || "tool");
+  if (!isHitlTool(toolName, hitlTools) || !isHitlInterrupt(pendingInterrupt)) {
+    return "running";
+  }
+  if (callMatchesHitlInterrupt(call, pendingInterrupt)) {
+    return "running";
+  }
+  return "queued";
+}
+
+export function shouldHideToolCallForHitl(
+  call: Record<string, unknown>,
+  pendingInterrupt: unknown,
+): boolean {
+  return callMatchesHitlInterrupt(call, pendingInterrupt);
+}
+
+export function turnHasRenderableToolCards(
+  turnMessages: TurnMessage[],
+  toolResults: Map<string, MessageOut>,
+  hitlTools: string[],
+  showAll: boolean,
+  pendingInterrupt?: unknown,
+  agentUserInput = false,
+): boolean {
+  for (const { index: messageIndex, message: msg } of turnMessages) {
+    if (msg.role !== "assistant") continue;
+    for (const [callIndex, call] of (msg.tool_calls || []).entries()) {
+      const callRecord = call as Record<string, unknown>;
+      const toolName = String(callRecord.name || "tool");
+      if (!shouldShowToolActivity(toolName, hitlTools, showAll)) continue;
+      const callId = String(callRecord.id || `${messageIndex}_${callIndex}`);
+      const resultMessage = callId ? toolResults.get(callId) : undefined;
+      const isPendingHitl =
+        !resultMessage && shouldHideToolCallForHitl(callRecord, pendingInterrupt);
+      const isPendingAskUser = agentUserInput && toolName === "ask_user" && !resultMessage;
+      if (isPendingHitl || isPendingAskUser) continue;
+      return true;
+    }
+  }
+  return false;
 }

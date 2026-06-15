@@ -7,6 +7,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from ..config import settings
+from ..hitl import is_hitl_interrupt, ui_mode_from_interrupt, ui_mode_from_state
 from ..run_scope import count_human_messages, derive_run_hash
 from ..skill_progress import load_phases, read_progress, reconcile_run_progress
 from .schemas import ChatResponse, MessageOut
@@ -102,6 +103,59 @@ def msg_to_out(msg: Any) -> MessageOut | None:
     return None
 
 
+def thread_state_payload(
+    agent,
+    thread_id: str,
+    *,
+    bearer_token: str | None = None,
+    gitlab_token: str | None = None,
+) -> dict[str, Any]:
+    """Canonical thread snapshot for UI: messages, interrupt, progress."""
+    base_config = thread_config(
+        thread_id,
+        bearer_token=bearer_token,
+        gitlab_token=gitlab_token,
+    )
+    state = agent.get_state(base_config)
+    raw_messages = state.values.get("messages", []) if state and state.values else []
+    out_messages = [m for m in (msg_to_out(m) for m in raw_messages) if m is not None]
+
+    interrupt_payload = extract_interrupt_from_state(agent, base_config)
+    interrupted = interrupt_payload is not None
+    ui_mode = ui_mode_from_state(interrupt_payload, state)
+
+    run_hash: str | None = None
+    progress: dict[str, Any] | None = None
+    phases: list[dict[str, str]] = []
+
+    if raw_messages:
+        if interrupted:
+            resume_config = run_config_for_resume(
+                agent, thread_id, bearer_token, gitlab_token
+            )
+            run_hash = resume_config.get("configurable", {}).get("run_hash")
+        else:
+            turn_index = max(count_human_messages(raw_messages) - 1, 0)
+            run_hash = derive_run_hash(thread_id, turn_index)
+
+        if run_hash:
+            progress_data = progress_payload(thread_id, run_hash)
+            if progress_data:
+                progress = progress_data.get("progress")
+                phases = progress_data.get("phases") or []
+
+    return {
+        "thread_id": thread_id,
+        "messages": out_messages,
+        "interrupted": interrupted,
+        "interrupt_payload": interrupt_payload,
+        "ui_mode": ui_mode,
+        "run_hash": run_hash,
+        "progress": progress,
+        "phases": phases,
+    }
+
+
 def build_chat_response(agent, thread_id: str, config: dict[str, Any]) -> ChatResponse:
     interrupt_payload = extract_interrupt_from_state(agent, config)
     interrupted = interrupt_payload is not None
@@ -146,6 +200,7 @@ def messages_payload(agent, config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def done_payload(agent, thread_id: str, config: dict[str, Any], run_hash: str) -> dict[str, Any]:
+    state = agent.get_state(config)
     interrupt = extract_interrupt_from_state(agent, config)
     interrupted = interrupt is not None
     messages = messages_payload(agent, config)
@@ -164,6 +219,7 @@ def done_payload(agent, thread_id: str, config: dict[str, Any], run_hash: str) -
         "messages": messages,
         "interrupted": interrupted,
         "interrupt_payload": interrupt,
+        "ui_mode": ui_mode_from_state(interrupt, state),
         "progress": progress_data.get("progress") if progress_data else None,
         "phases": progress_data.get("phases") if progress_data else [],
     }

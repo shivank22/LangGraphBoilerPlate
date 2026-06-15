@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { MessageOut } from "../api/types";
+import type { MessageOut, ToolStatus } from "../api/types";
 import {
   describeToolCall,
   describeToolResult,
@@ -13,11 +13,15 @@ interface Props {
   resultMessage?: MessageOut;
   hitlTools: string[];
   callId: string;
+  displayStatus?: ToolStatus;
 }
 
-function StatusIcon({ status }: { status: ReturnType<typeof getToolStatus> }) {
+function StatusIcon({ status }: { status: ToolStatus }) {
   if (status === "running") {
     return <span className="tool-status-spinner" aria-hidden="true" />;
+  }
+  if (status === "queued") {
+    return <span className="tool-status-icon tool-status-queued" aria-hidden="true">◷</span>;
   }
   if (status === "error") {
     return <span className="tool-status-icon tool-status-error" aria-hidden="true">✕</span>;
@@ -25,13 +29,20 @@ function StatusIcon({ status }: { status: ReturnType<typeof getToolStatus> }) {
   return <span className="tool-status-icon tool-status-success" aria-hidden="true">✓</span>;
 }
 
-export function ToolActivityCard({ call, resultMessage, hitlTools, callId }: Props) {
+export function ToolActivityCard({
+  call,
+  resultMessage,
+  hitlTools,
+  callId,
+  displayStatus,
+}: Props) {
   const toolName = String(call.name || "tool");
   const description = describeToolCall(call);
   const resultData = resultMessage ? parseToolResult(resultMessage.content) : null;
-  const status = getToolStatus(resultMessage, resultData);
+  const status = displayStatus ?? getToolStatus(resultMessage, resultData);
+  const runningLabel = status === "queued" ? "Queued — waiting for prior approvals" : "Running…";
   const resultSummary =
-    resultData !== null ? describeToolResult(toolName, resultData) : "Running…";
+    resultData !== null ? describeToolResult(toolName, resultData) : runningLabel;
 
   const [expanded, setExpanded] = useState(status === "running" || status === "error");
   const manualOverride = useRef(false);
@@ -58,7 +69,11 @@ export function ToolActivityCard({ call, resultMessage, hitlTools, callId }: Pro
   };
 
   return (
-    <div className="tool-disclosure" data-status={status} data-call-id={callId}>
+    <div
+      className="tool-disclosure"
+      data-status={status}
+      data-call-id={callId}
+    >
       <button type="button" className="tool-disclosure-header" onClick={toggle}>
         <span className={`tool-chevron ${expanded ? "open" : ""}`} aria-hidden="true">
           ▶
@@ -70,6 +85,9 @@ export function ToolActivityCard({ call, resultMessage, hitlTools, callId }: Pro
         {status === "completed" && (
           <span className="tool-disclosure-result">{resultSummary}</span>
         )}
+        {status === "queued" && (
+          <span className="tool-disclosure-result tool-disclosure-queued">{runningLabel}</span>
+        )}
       </button>
       <div className={`tool-disclosure-body ${expanded ? "open" : ""}`}>
         <div className="tool-disclosure-inner">
@@ -77,10 +95,10 @@ export function ToolActivityCard({ call, resultMessage, hitlTools, callId }: Pro
             <div className="tool-section-label">Input</div>
             <pre className="json-block">{JSON.stringify(call.args || {}, null, 2)}</pre>
           </div>
-          {status === "running" ? (
+          {status === "running" || status === "queued" ? (
             <div className="tool-section tool-running-hint">
-              <span className="tool-status-spinner" />
-              Executing…
+              {status === "running" ? <span className="tool-status-spinner" /> : null}
+              {status === "queued" ? runningLabel : "Executing…"}
             </div>
           ) : resultData !== null ? (
             <div className="tool-section">

@@ -1,4 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import darkMarkdownCss from "github-markdown-css/github-markdown-dark.css?url";
+import lightMarkdownCss from "github-markdown-css/github-markdown-light.css?url";
 
 type Theme = "light" | "dark";
 
@@ -25,6 +27,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("theme", theme);
+
+    const linkId = "github-markdown-theme";
+    let link = document.getElementById(linkId) as HTMLLinkElement | null;
+    if (!link) {
+      link = document.createElement("link");
+      link.id = linkId;
+      link.rel = "stylesheet";
+      document.head.appendChild(link);
+    }
+    link.href = theme === "dark" ? darkMarkdownCss : lightMarkdownCss;
   }, [theme]);
 
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));

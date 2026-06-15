@@ -17,10 +17,10 @@ from ..thread_store import load_thread_list
 from ..ui import title_store
 from .helpers import (
     build_chat_response,
-    msg_to_out,
     run_config_for_new_turn,
     run_config_for_resume,
     thread_config,
+    thread_state_payload,
 )
 from .schemas import (
     ArtifactContentResponse,
@@ -178,11 +178,14 @@ def resume_stream(thread_id: str, body: ResumeRequest, request: Request) -> Stre
 @router.get("/chat/{thread_id}/history", response_model=HistoryResponse, tags=["chat"])
 def history(thread_id: str, request: Request) -> HistoryResponse:
     agent = _get_agent(request)
-    config = thread_config(thread_id)
-    state = agent.get_state(config)
-    messages = state.values.get("messages", []) if state and state.values else []
-    out_messages = [m for m in (msg_to_out(m) for m in messages) if m is not None]
-    return HistoryResponse(thread_id=thread_id, messages=out_messages)
+    return HistoryResponse(**thread_state_payload(agent, thread_id))
+
+
+@router.get("/chat/{thread_id}/state", response_model=HistoryResponse, tags=["chat"])
+def thread_state(thread_id: str, request: Request) -> HistoryResponse:
+    """Canonical agent-owned snapshot for UI sync (same shape as history)."""
+    agent = _get_agent(request)
+    return HistoryResponse(**thread_state_payload(agent, thread_id))
 
 
 @router.get("/chat/{thread_id}/progress", response_model=SkillProgressResponse, tags=["chat"])

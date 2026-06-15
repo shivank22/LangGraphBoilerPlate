@@ -1,3 +1,4 @@
+import { MarkdownContent } from "./MarkdownContent";
 import { useAcceleratingTypewriter } from "../hooks/useAcceleratingTypewriter";
 
 interface Props {
@@ -5,12 +6,12 @@ interface Props {
   active: boolean;
 }
 
-export function TypewriterText({ text, active }: Props) {
+export function TypewriterMarkdown({ text, active }: Props) {
   const { displayed, isTyping } = useAcceleratingTypewriter(text, active);
 
   return (
     <span className="typewriter-text">
-      {displayed}
+      <MarkdownContent content={displayed} />
       {isTyping && <span className="typewriter-cursor" aria-hidden="true" />}
     </span>
   );

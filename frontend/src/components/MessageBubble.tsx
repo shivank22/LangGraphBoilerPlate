@@ -1,21 +1,13 @@
 import type { MessageOut } from "../api/types";
-import { parseJsonRecursively, skillNameFromCall } from "../utils/message";
-import { shouldShowToolActivity } from "../utils/toolActivity";
-import { ToolActivityCard } from "./ToolActivityCard";
-import { TypewriterText } from "./TypewriterText";
+import { parseJsonRecursively } from "../utils/message";
+import { MarkdownContent } from "./MarkdownContent";
+import { TypewriterMarkdown } from "./TypewriterMarkdown";
 
 const USER_AVATAR = "🧑‍💻";
 const BOT_AVATAR = "👾";
 
 interface Props {
   message: MessageOut;
-  messageIndex: number;
-  toolResults: Map<string, MessageOut>;
-  shownToolIds: Set<string>;
-  hitlTools: string[];
-  showAllToolActivity: boolean;
-  skillBadgeShown: boolean;
-  onSkillBadgeShown: () => void;
   animateTyping?: boolean;
 }
 
@@ -58,13 +50,6 @@ function StructuredContent({ data }: { data: unknown }) {
 
 export function MessageBubble({
   message,
-  messageIndex,
-  toolResults,
-  shownToolIds,
-  hitlTools,
-  showAllToolActivity,
-  skillBadgeShown,
-  onSkillBadgeShown,
   animateTyping = false,
 }: Props) {
   if (message.role === "user") {
@@ -85,58 +70,28 @@ export function MessageBubble({
     const text = message.content || "";
     const parsed = text ? parseJsonRecursively(text.trim()) : "";
     const isPlainText = typeof parsed === "string" || typeof parsed === "number";
-    const toolCalls = message.tool_calls || [];
-    const visibleTools = toolCalls.filter((call) => {
-      const toolName = String((call as Record<string, unknown>).name || "tool");
-      return shouldShowToolActivity(toolName, hitlTools, showAllToolActivity);
-    });
-
     return (
       <div className="assistant-block">
         {text && (
-          <div className="bubble-row bot">
+          <div className="bubble-row bot prose-row">
             <div className="bubble-avatar bot-avatar" aria-hidden="true">
               {BOT_AVATAR}
             </div>
-            <div className="bubble bot">
-              <div className="bubble-content">
-                {isPlainText ? (
-                  <TypewriterText
-                    text={String(parsed)}
-                    active={animateTyping}
-                  />
+            <div className="assistant-prose">
+              {isPlainText ? (
+                animateTyping ? (
+                  <TypewriterMarkdown text={String(parsed)} active={animateTyping} />
                 ) : (
-                  <StructuredContent data={parsed} />
-                )}
-              </div>
+                  <MarkdownContent content={String(parsed)} />
+                )
+              ) : (
+                <div className="bubble bot">
+                  <div className="bubble-content">
+                    <StructuredContent data={parsed} />
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        )}
-        {visibleTools.length > 0 && (
-          <div className="tool-disclosure-group">
-            {toolCalls.map((call, callIndex) => {
-              const callRecord = call as Record<string, unknown>;
-              const toolName = String(callRecord.name || "tool");
-              const skill = skillNameFromCall(callRecord);
-              if (skill && !skillBadgeShown) {
-                onSkillBadgeShown();
-              }
-              if (!shouldShowToolActivity(toolName, hitlTools, showAllToolActivity)) {
-                return null;
-              }
-              const callId = String(callRecord.id || `${messageIndex}_${callIndex}`);
-              const resultMessage = callId ? toolResults.get(callId) : undefined;
-              if (callId) shownToolIds.add(callId);
-              return (
-                <ToolActivityCard
-                  key={`${messageIndex}-${callIndex}-${callId}`}
-                  call={callRecord}
-                  resultMessage={resultMessage}
-                  hitlTools={hitlTools}
-                  callId={callId}
-                />
-              );
-            })}
           </div>
         )}
       </div>

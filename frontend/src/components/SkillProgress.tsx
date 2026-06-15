@@ -15,15 +15,16 @@ function hasStarted(progress: SkillProgressType): boolean {
 interface Props {
   progress: SkillProgressType;
   phases: SkillPhase[];
+  nested?: boolean;
 }
 
-export function SkillProgress({ progress, phases }: Props) {
+export function SkillProgress({ progress, phases, nested = false }: Props) {
   if (!progress.skill || !phases.length || !hasStarted(progress)) return null;
 
   const phaseStates = progress.phases || {};
 
   return (
-    <div className="skill-progress">
+    <div className={`skill-progress${nested ? " skill-progress-nested" : ""}`}>
       <strong>Skill progress:</strong> <code>{progress.skill}</code>
       {phases.map((phase) => {
         const state = phaseStates[phase.id] || {};

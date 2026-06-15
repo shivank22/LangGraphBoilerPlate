@@ -10,6 +10,26 @@ def is_hitl_interrupt(interrupt_payload: Any) -> bool:
     return isinstance(interrupt_payload, dict) and bool(interrupt_payload.get("action_requests"))
 
 
+def ui_mode_from_interrupt(interrupt_payload: Any | None) -> str:
+    """UI mode derived from checkpoint interrupt payload."""
+    if interrupt_payload is None:
+        return "idle"
+    if is_hitl_interrupt(interrupt_payload):
+        return "hitl"
+    return "user_input"
+
+
+def ui_mode_from_state(interrupt_payload: Any | None, state: Any) -> str:
+    """Canonical UI mode from checkpoint interrupt + graph state."""
+    if interrupt_payload is not None:
+        return ui_mode_from_interrupt(interrupt_payload)
+    if state is not None:
+        next_nodes = getattr(state, "next", None)
+        if next_nodes:
+            return "running"
+    return "idle"
+
+
 def build_hitl_resume_decision(
     decision: str,
     *,
